@@ -21,6 +21,8 @@
 
 ## 📖 Overview
 
+> 📚 **详细业务背景、需求与阶段路线图 (Requirements & Roadmap)**：参见 [REQUIREMENTS.md](REQUIREMENTS.md)。
+
 **OpenAI Proxy for Antigravity** is a standalone local server that acts as a bridge between OpenAI-compatible clients (like [Zed IDE](https://zed.dev), VS Code, or Cursor) and Google's powerful **Antigravity API**.
 
 ### 🌟 Key Features
