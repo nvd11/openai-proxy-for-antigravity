@@ -48,6 +48,14 @@ export interface OpenAIRequest {
   top_p?: number;
   frequency_penalty?: number;
   presence_penalty?: number;
+  // OpenCode & reasoning extensions
+  reasoning_effort?: 'low' | 'medium' | 'high' | 'none' | string;
+  thinking?: {
+    type?: 'enabled' | 'disabled' | string;
+    budget_tokens?: number;
+  };
+  thinking_budget?: number;
+  thinkingBudget?: number;
 }
 
 export interface OpenAIResponse {
@@ -60,6 +68,7 @@ export interface OpenAIResponse {
     message: {
       role: 'assistant';
       content: string | null;
+      reasoning_content?: string | null;
       tool_calls?: Array<{
         id: string;
         type: 'function';
@@ -212,7 +221,8 @@ export class OpenAIToAntigravityAdapter {
    * Determines appropriate header style based on model name
    */
   getHeaderStyle(model: string): HeaderStyle {
-    const lower = model.toLowerCase();
+    const { baseModel } = this.extractModelInfo(model);
+    const lower = baseModel.toLowerCase();
 
     // Models with antigravity- prefix use Antigravity headers
     if (lower.startsWith('antigravity-')) {
@@ -234,16 +244,33 @@ export class OpenAIToAntigravityAdapter {
   }
 
   /**
+   * Extracts the base model name and any thinking suffix
+   */
+  extractModelInfo(model: string): { baseModel: string; thinkingSuffix?: string } {
+    let cleaned = model.trim();
+    // Remove "antigravity-" prefix if present
+    cleaned = cleaned.replace(/^antigravity-/, '');
+    // Remove ":antigravity" suffix if present
+    cleaned = cleaned.replace(/:antigravity$/i, '');
+
+    // Check for thinking suffix: e.g. :low, :medium, :med, :high, :max, :ultra, :none, :off, :0, :thinking, :8k, :16k, :4096
+    const suffixRegex = /:(low|medium|med|high|max|ultra|none|off|0|thinking|\d+k?)$/i;
+    const match = cleaned.match(suffixRegex);
+
+    if (match) {
+      const thinkingSuffix = match[1].toLowerCase();
+      const baseModel = cleaned.slice(0, match.index);
+      return { baseModel, thinkingSuffix };
+    }
+
+    return { baseModel: cleaned };
+  }
+
+  /**
    * Extracts the actual model name (strips prefix/suffix)
    */
   extractModelName(model: string): string {
-    // Remove "antigravity-" prefix if present
-    let cleaned = model.replace(/^antigravity-/, '');
-
-    // Remove ":antigravity" suffix if present
-    cleaned = cleaned.replace(/:antigravity$/, '');
-
-    return cleaned;
+    return this.extractModelInfo(model).baseModel;
   }
 
   /**
@@ -458,15 +485,14 @@ export class OpenAIToAntigravityAdapter {
   }
 
   /**
-   * Checks if a model is a thinking model
+   * Checks if a model is a thinking model by default
    */
   isThinkingModel(model: string): boolean {
     return model.includes('-thinking') || model.includes('opus-4-6');
   }
 
   /**
-   * Gets the thinking budget for a thinking model
-   * Based on THINKING_TIER_BUDGETS from opencode-antigravity-auth
+   * Gets default thinking budget for a thinking model
    */
   getThinkingBudget(model: string): number {
     const budgets: Record<string, number> = {
@@ -476,6 +502,96 @@ export class OpenAIToAntigravityAdapter {
       'claude-opus-4-5-thinking': 8192,
     };
     return budgets[model] || 8192;
+  }
+
+  /**
+   * Parses thinking budget from a model suffix (e.g. low, high, 16k, 4096)
+   */
+  parseThinkingSuffix(suffix: string): number | undefined {
+    const s = suffix.toLowerCase();
+    const tierBudgets: Record<string, number> = {
+      'none': 0,
+      'off': 0,
+      '0': 0,
+      'low': 2048,
+      'med': 8192,
+      'medium': 8192,
+      'high': 16384,
+      'max': 32768,
+      'ultra': 32768,
+      'thinking': 8192,
+    };
+
+    if (s in tierBudgets) {
+      return tierBudgets[s];
+    }
+    if (s.endsWith('k')) {
+      const num = parseInt(s.slice(0, -1), 10);
+      if (!isNaN(num)) {
+        return num * 1024;
+      }
+    }
+    const num = parseInt(s, 10);
+    if (!isNaN(num)) {
+      return num;
+    }
+    return undefined;
+  }
+
+  /**
+   * Determines thinking budget based on OpenCode conventions:
+   * 1. Explicit body parameter: thinking_budget / thinkingBudget
+   * 2. Body parameter: thinking { budget_tokens, type }
+   * 3. Body parameter: reasoning_effort (low/medium/high/none)
+   * 4. Model suffix (e.g. :low, :medium, :high, :16k, :none)
+   * 5. Default model behavior (thinking models default to 8192)
+   */
+  determineThinkingBudget(openaiReq: OpenAIRequest, internalModel: string): number | undefined {
+    // 1. Explicit direct numeric budget in request body
+    if (typeof openaiReq.thinking_budget === 'number') {
+      return openaiReq.thinking_budget;
+    }
+    if (typeof openaiReq.thinkingBudget === 'number') {
+      return openaiReq.thinkingBudget;
+    }
+
+    // 2. OpenCode / Anthropic thinking object in request body
+    if (openaiReq.thinking) {
+      if (openaiReq.thinking.type === 'disabled') {
+        return 0;
+      }
+      if (typeof openaiReq.thinking.budget_tokens === 'number') {
+        return openaiReq.thinking.budget_tokens;
+      }
+      if (openaiReq.thinking.type === 'enabled') {
+        return 8192;
+      }
+    }
+
+    // 3. OpenAI reasoning_effort in request body
+    if (openaiReq.reasoning_effort) {
+      const effort = String(openaiReq.reasoning_effort).toLowerCase();
+      if (effort === 'none') return 0;
+      if (effort === 'low') return 2048;
+      if (effort === 'medium' || effort === 'med') return 8192;
+      if (effort === 'high' || effort === 'max') return 16384;
+    }
+
+    // 4. Model suffix (e.g. :low, :medium, :high, :16k, :none)
+    const { thinkingSuffix } = this.extractModelInfo(openaiReq.model);
+    if (thinkingSuffix) {
+      const parsed = this.parseThinkingSuffix(thinkingSuffix);
+      if (parsed !== undefined) {
+        return parsed;
+      }
+    }
+
+    // 5. Default model behavior for thinking models
+    if (this.isThinkingModel(internalModel)) {
+      return this.getThinkingBudget(internalModel);
+    }
+
+    return undefined;
   }
 
   /**
@@ -500,19 +616,33 @@ export class OpenAIToAntigravityAdapter {
     const { contents, systemInstruction } = this.convertMessages(openaiReq.messages);
     const tools = this.convertTools(openaiReq.tools);
 
+    const thinkingBudget = this.determineThinkingBudget(openaiReq, internalModel);
+
+    // Anthropic Claude strictly requires max_tokens > thinking.budget_tokens
+    let maxOutputTokens = openaiReq.max_tokens;
+    if (thinkingBudget !== undefined && thinkingBudget > 0) {
+      if (!maxOutputTokens || maxOutputTokens <= thinkingBudget) {
+        maxOutputTokens = Math.max(maxOutputTokens || 0, thinkingBudget + 4096);
+      }
+    }
+
     const generationConfig: any = {
       temperature: openaiReq.temperature,
-      maxOutputTokens: openaiReq.max_tokens,
+      maxOutputTokens,
       topP: openaiReq.top_p,
       stopSequences: openaiReq.stop
         ? Array.isArray(openaiReq.stop) ? openaiReq.stop : [openaiReq.stop]
         : undefined,
     };
 
-    if (this.isThinkingModel(internalModel)) {
+    if (thinkingBudget !== undefined && thinkingBudget > 0) {
       generationConfig.thinkingConfig = {
-        thinkingBudget: this.getThinkingBudget(internalModel),
+        thinkingBudget,
         includeThoughts: true,
+      };
+    } else if (thinkingBudget === 0) {
+      generationConfig.thinkingConfig = {
+        thinkingBudget: 0,
       };
     }
 
@@ -563,11 +693,14 @@ export class OpenAIToAntigravityAdapter {
     const firstCandidate = candidates[0];
 
     let content: string | null = null;
+    let reasoningContent: string | null = null;
     const toolCalls: OpenAIResponse['choices'][0]['message']['tool_calls'] = [];
 
     if (firstCandidate?.content?.parts) {
       for (const part of firstCandidate.content.parts) {
-        if (part.text) {
+        if (part.thought) {
+          reasoningContent = (reasoningContent || '') + (part.text || '');
+        } else if (part.text) {
           content = (content || '') + part.text;
         }
         if (part.functionCall) {
@@ -595,6 +728,7 @@ export class OpenAIToAntigravityAdapter {
         message: {
           role: 'assistant',
           content,
+          ...(reasoningContent ? { reasoning_content: reasoningContent } : {}),
           ...(toolCalls.length > 0 && { tool_calls: toolCalls }),
         },
         finish_reason: finishReason,
@@ -677,8 +811,10 @@ export class OpenAIToAntigravityAdapter {
 
     if (firstCandidate?.content?.parts) {
       for (const part of firstCandidate.content.parts) {
-        if (part.text) {
-          delta.content = part.text;
+        if (part.thought) {
+          delta.reasoning_content = (delta.reasoning_content || '') + (part.text || '');
+        } else if (part.text) {
+          delta.content = (delta.content || '') + part.text;
         }
         if (part.functionCall) {
           delta.tool_calls = [{
