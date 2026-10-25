@@ -3,6 +3,9 @@ import { loadAccounts, saveAccounts, type AccountStorageV3, type RateLimitStateV
 import type { OAuthAuthDetails, RefreshParts } from "../types.js";
 import type { AccountSelectionStrategy } from "../config/schema.js";
 import { getHealthTracker, getTokenTracker, selectHybridAccount, type AccountWithMetrics } from "./rotation.js";
+import { createLogger } from "../logger.js";
+
+const log = createLogger("accounts");
 
 export type { ModelFamily, HeaderStyle, CooldownReason } from "./storage.js";
 export type { AccountSelectionStrategy } from "../config/schema.js";
@@ -671,7 +674,11 @@ export class AccountManager {
       },
     };
 
-    await saveAccounts(storage);
+    try {
+      await saveAccounts(storage);
+    } catch (saveError) {
+      log.debug("Skipping persist accounts on read-only mount");
+    }
   }
 
   requestSaveToDisk(): void {

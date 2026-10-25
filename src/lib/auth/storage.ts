@@ -524,19 +524,33 @@ export async function loadAccounts(): Promise<AccountStorageV3 | null> {
 export async function saveAccounts(storage: AccountStorageV3): Promise<void> {
   const path = getStoragePath();
   const configDir = dirname(path);
-  await fs.mkdir(configDir, { recursive: true });
-  await ensureGitignore(configDir);
 
-  await withFileLock(path, async () => {
-    const existing = await loadAccountsUnsafe();
-    const merged = existing ? mergeAccountStorage(existing, storage) : storage;
+  try {
+    await fs.mkdir(configDir, { recursive: true });
+    await ensureGitignore(configDir);
 
-    const tempPath = `${path}.${randomBytes(6).toString("hex")}.tmp`;
-    const content = JSON.stringify(merged, null, 2);
+    await withFileLock(path, async () => {
+      const existing = await loadAccountsUnsafe();
+      const merged = existing ? mergeAccountStorage(existing, storage) : storage;
 
-    await fs.writeFile(tempPath, content, "utf-8");
-    await fs.rename(tempPath, path);
-  });
+      const tempPath = `${path}.${randomBytes(6).toString("hex")}.tmp`;
+      const content = JSON.stringify(merged, null, 2);
+
+      await fs.writeFile(tempPath, content, "utf-8");
+      await fs.rename(tempPath, path);
+    });
+  } catch (error: any) {
+    if (
+      error?.code === "EROFS" ||
+      error?.code === "EACCES" ||
+      error?.code === "EPERM" ||
+      String(error?.message).includes("read-only file system")
+    ) {
+      log.debug("Config directory is read-only, keeping state in memory (running in container/K8s)");
+      return;
+    }
+    log.warn("Failed to save accounts to disk", { error: String(error) });
+  }
 }
 
 async function loadAccountsUnsafe(): Promise<AccountStorageV3 | null> {
