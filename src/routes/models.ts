@@ -4,6 +4,7 @@
  */
 
 import type { FastifyInstance } from 'fastify';
+import { adapter } from '../adapters/openai-adapter.js';
 
 const AVAILABLE_MODELS = [
   {
@@ -41,7 +42,9 @@ export default async function modelsRoutes(server: FastifyInstance) {
   });
 
   server.get('/models/:model', async (request: any) => {
-    const model = AVAILABLE_MODELS.find(m => m.id === request.params.model);
+    const rawModel = request.params.model;
+    const { baseModel } = adapter.extractModelInfo(rawModel);
+    const model = AVAILABLE_MODELS.find(m => m.id === rawModel || m.id === baseModel);
     
     if (!model) {
       return {
@@ -52,6 +55,9 @@ export default async function modelsRoutes(server: FastifyInstance) {
       };
     }
 
-    return model;
+    return {
+      ...model,
+      id: rawModel,
+    };
   });
 }
