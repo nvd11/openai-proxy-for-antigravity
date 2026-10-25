@@ -219,8 +219,13 @@ export class OpenAIToAntigravityAdapter {
       return 'antigravity';
     }
 
-    // Claude models always use Antigravity
-    if (lower.includes('claude')) {
+    // Claude and GPT-OSS models always use Antigravity
+    if (lower.includes('claude') || lower.includes('gpt-oss')) {
+      return 'antigravity';
+    }
+
+    // Gemini 3.x Flash/Pro models use Antigravity headers (daily sandbox endpoint)
+    if (lower.includes('gemini-3') || lower.includes('gemini-3.8') || lower.includes('gemini-3.5')) {
       return 'antigravity';
     }
 
@@ -380,41 +385,59 @@ export class OpenAIToAntigravityAdapter {
    * Resolves internal Antigravity model ID from public model name
    */
   resolveAntigravityModel(model: string): string {
-    const name = this.extractModelName(model);
+    const name = this.extractModelName(model).toLowerCase();
 
-    // For Gemini 3 Pro models, map to specific tier
-    if (name === 'gemini-3-pro') {
-      return 'gemini-3-pro-low';
+    // Gemini 3.8 Flash mappings (Google internal ID: gemini-3.8-flash-tiered)
+    if (
+      name === 'gemini-3.8-flash' ||
+      name === 'gemini-3.8-flash-medium' ||
+      name === 'gemini-3.8-flash-low' ||
+      name === 'gemini-3.8-flash-high' ||
+      name === 'gemini-3.8-flash-tiered' ||
+      name === 'gemini-3-flash'
+    ) {
+      return 'gemini-3.8-flash-tiered';
     }
 
-    // For Gemini 3 Flash models without tier suffix, add default -low
-    if (name === 'gemini-3-flash') {
-      return 'gemini-3-flash';
+    // For Gemini 3 Pro models (since Gemini 3 Pro is demised by Google, gracefully map to Gemini 3.8 Flash tiered)
+    if (name === 'gemini-3-pro' || name === 'gemini-3-pro-low' || name === 'gemini-3-pro-high') {
+      return 'gemini-3.8-flash-tiered';
     }
 
-    // For Claude models, use names directly as documented in Antigravity API spec
-    // Model IDs are already correct - no mapping needed
-    const directModels = [
-      'claude-sonnet-4-5',
-      'claude-sonnet-4-5-thinking',
-      'claude-opus-4-5-thinking',
-    ];
+    // Claude models (Google internal IDs: claude-sonnet-4-6, claude-opus-4-6-thinking)
+    if (
+      name === 'claude-sonnet-4-6' ||
+      name === 'claude-sonnet-4-5' ||
+      name === 'claude-3-5-sonnet' ||
+      name === 'claude-3-5-sonnet-latest' ||
+      name === 'sonnet' ||
+      name === 'sonnet-4-6'
+    ) {
+      return 'claude-sonnet-4-6';
+    }
 
-    if (directModels.includes(name)) {
-      return name;
+    if (
+      name === 'claude-opus-4-6-thinking' ||
+      name === 'claude-opus-4-5-thinking' ||
+      name === 'claude-3-opus' ||
+      name === 'opus' ||
+      name === 'opus-4-6'
+    ) {
+      return 'claude-opus-4-6-thinking';
+    }
+
+    // GPT-OSS & Gemini Lite
+    if (name.includes('gpt-oss')) {
+      return 'gpt-oss-120b-medium';
+    }
+    if (name.includes('flash-lite')) {
+      return 'gemini-3.5-flash-lite';
     }
 
     // Map of public names to internal Antigravity IDs (for legacy compatibility)
     const mappings: Record<string, string> = {
-      // Gemini models
       'gemini-2.0-flash-thinking-exp': 'gemini-2.0-flash-thinking-exp-1219',
-      
-      // Claude aliases
-      'sonnet': 'claude-sonnet-4-5',
-      'claude-3-5-sonnet': 'claude-sonnet-4-5',
-      'claude-3-5-sonnet-latest': 'claude-sonnet-4-5',
-      'opus': 'claude-opus-4-5-thinking',
-      'claude-3-opus': 'claude-opus-4-5-thinking',
+      'default': 'gemini-3.8-flash-tiered',
     };
 
     return mappings[name] || name;
@@ -438,7 +461,7 @@ export class OpenAIToAntigravityAdapter {
    * Checks if a model is a thinking model
    */
   isThinkingModel(model: string): boolean {
-    return model.includes('-thinking');
+    return model.includes('-thinking') || model.includes('opus-4-6');
   }
 
   /**
@@ -447,6 +470,8 @@ export class OpenAIToAntigravityAdapter {
    */
   getThinkingBudget(model: string): number {
     const budgets: Record<string, number> = {
+      'claude-sonnet-4-6': 8192,
+      'claude-opus-4-6-thinking': 8192,
       'claude-sonnet-4-5-thinking': 8192,
       'claude-opus-4-5-thinking': 8192,
     };

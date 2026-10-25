@@ -57,101 +57,98 @@ export default async function chatRoutes(server: FastifyInstance) {
           hasTools: Boolean(openaiReq.tools && openaiReq.tools.length > 0),
         });
 
-        // Get account from rotation
-        const account = await accountService.getNextAccount(openaiReq.model);
+        // Failover retry loop across accounts
+        const totalAccounts = await accountService.getAccountCount();
+        const maxAttempts = Math.max(1, totalAccounts);
+        let attempt = 0;
+        let response: Response | null = null;
+        let lastUrl = '';
+        let currentAccount: any = null;
 
-        if (!account) {
+        while (attempt < maxAttempts) {
+          attempt++;
+          currentAccount = await accountService.getNextAccount(openaiReq.model);
+
+          if (!currentAccount) {
+            break;
+          }
+
+          // Get auth details from account
+          let authRecord = accountService.getAccountManager().then(m => m.toAuthDetails(currentAccount));
+          let auth = await authRecord;
+
+          // Refresh token if needed
+          if (accessTokenExpired(auth)) {
+            log.debug('Access token expired, refreshing...', {
+              accountIndex: currentAccount.index,
+              email: currentAccount.email,
+            });
+
+            const refreshed = await refreshAccessToken(auth);
+            if (!refreshed) {
+              log.error('Token refresh failed', {
+                accountIndex: currentAccount.index,
+              });
+              continue;
+            }
+
+            // Update account with new token
+            const manager = await accountService.getAccountManager();
+            manager.updateFromAuth(currentAccount, refreshed);
+            await manager.saveToDisk();
+            auth = refreshed;
+          }
+
+          const accessToken = auth.access;
+          if (!accessToken) {
+            continue;
+          }
+
+          // Get projectId
+          const projectId = currentAccount.parts.projectId || currentAccount.parts.managedProjectId || 'rising-fact-p41fc';
+
+          // Convert OpenAI request to Antigravity
+          const { url, init, headerStyle } = await adapter.convertRequest(
+            openaiReq,
+            accessToken,
+            projectId
+          );
+          lastUrl = url;
+
+          log.info('Making Antigravity request', {
+            url,
+            projectId,
+            headerStyle,
+            accountIndex: currentAccount.index,
+            email: currentAccount.email,
+            attempt,
+          });
+
+          // Make request to Antigravity
+          response = await fetch(url, init);
+
+          // Handle rate limits with seamless failover
+          if (response.status === 429) {
+            log.warn('Rate limited on account, failing over to next account...', {
+              accountIndex: currentAccount.index,
+              email: currentAccount.email,
+              model: openaiReq.model,
+            });
+
+            await accountService.markRateLimited(currentAccount, 60_000, openaiReq.model);
+            metricsService.recordRequest(openaiReq.model, Date.now() - startTime, 'rate_limited');
+            response = null;
+            continue;
+          }
+
+          // Success or non-429 error received, break retry loop
+          break;
+        }
+
+        if (!response) {
           return reply.status(429).send({
             error: {
               message: 'All accounts are rate-limited. Please try again later.',
-              type: 'rate_limit_error',
-            },
-          });
-        }
-
-        // Get auth details from account
-        let authRecord = accountService.getAccountManager().then(m => m.toAuthDetails(account));
-        let auth = await authRecord;
-
-        // Refresh token if needed
-        if (accessTokenExpired(auth)) {
-          log.debug('Access token expired, refreshing...', {
-            accountIndex: account.index,
-            email: account.email,
-          });
-
-          const refreshed = await refreshAccessToken(auth);
-          if (!refreshed) {
-            log.error('Token refresh failed', {
-              accountIndex: account.index,
-            });
-
-            return reply.status(500).send({
-              error: {
-                message: 'Authentication failed. Please re-authenticate.',
-                type: 'authentication_error',
-              },
-            });
-          }
-
-          // Update account with new token
-          const manager = await accountService.getAccountManager();
-          manager.updateFromAuth(account, refreshed);
-          await manager.saveToDisk();
-          auth = refreshed;
-        }
-
-        const accessToken = auth.access;
-        if (!accessToken) {
-          return reply.status(500).send({
-            error: {
-              message: 'Missing access token',
-              type: 'authentication_error',
-            },
-          });
-        }
-
-        // Get projectId
-        const projectId = account.parts.projectId || account.parts.managedProjectId || 'rising-fact-p41fc';
-
-        // Convert OpenAI request to Antigravity
-        const { url, init, headerStyle } = await adapter.convertRequest(
-          openaiReq,
-          accessToken,
-          projectId
-        );
-
-        log.info('Making Antigravity request', {
-          url,
-          projectId,
-          headerStyle,
-          accountIndex: account.index,
-        });
-
-        // Make request to Antigravity
-        const response = await fetch(url, init);
-
-        // Debug: Log headers to check for rate limit info
-        const headerObj: Record<string, string> = {};
-        response.headers.forEach((val, key) => { headerObj[key] = val; });
-        log.debug('Antigravity Response Headers', { headers: headerObj, status: response.status });
-
-        // Handle rate limits
-        if (response.status === 429) {
-          log.warn('Rate limited', {
-            accountIndex: account.index,
-            model: openaiReq.model,
-          });
-
-          // Mark account as rate-limited
-          await accountService.markRateLimited(account, 60_000, openaiReq.model);
-
-          // Record metrics
-          metricsService.recordRequest(openaiReq.model, Date.now() - startTime, 'rate_limited');
-
-          return reply.status(429).send({
-            error: {
-              message: 'Rate limit exceeded. Retrying with another account...',
               type: 'rate_limit_error',
             },
           });
@@ -165,7 +162,7 @@ export default async function chatRoutes(server: FastifyInstance) {
             statusText: response.statusText,
             headers: Object.fromEntries(response.headers.entries()),
             body: errorText.slice(0, 2000), // Log more of the body
-            url: url, // Log the URL that failed
+            url: lastUrl, // Log the URL that failed
           });
 
           metricsService.recordRequest(openaiReq.model, Date.now() - startTime, 'error');

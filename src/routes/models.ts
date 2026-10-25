@@ -7,13 +7,85 @@ import type { FastifyInstance } from 'fastify';
 
 const AVAILABLE_MODELS = [
   {
-    id: 'antigravity-gemini-3-pro',
+    id: 'antigravity-gemini-3.8-flash',
+    object: 'model',
+    created: 1700000000,
+    owned_by: 'google-antigravity',
+  },
+  {
+    id: 'antigravity-gemini-3.8-flash-medium',
+    object: 'model',
+    created: 1700000000,
+    owned_by: 'google-antigravity',
+  },
+  {
+    id: 'antigravity-gemini-3.8-flash-low',
+    object: 'model',
+    created: 1700000000,
+    owned_by: 'google-antigravity',
+  },
+  {
+    id: 'antigravity-gemini-3.8-flash-high',
+    object: 'model',
+    created: 1700000000,
+    owned_by: 'google-antigravity',
+  },
+  {
+    id: 'gemini-3.8-flash',
+    object: 'model',
+    created: 1700000000,
+    owned_by: 'google-antigravity',
+  },
+  {
+    id: 'gemini-3.8-flash-medium',
     object: 'model',
     created: 1700000000,
     owned_by: 'google-antigravity',
   },
   {
     id: 'antigravity-gemini-3-flash',
+    object: 'model',
+    created: 1700000000,
+    owned_by: 'google-antigravity',
+  },
+  {
+    id: 'antigravity-claude-sonnet-4-6',
+    object: 'model',
+    created: 1700000000,
+    owned_by: 'google-antigravity',
+  },
+  {
+    id: 'antigravity-claude-opus-4-6-thinking',
+    object: 'model',
+    created: 1700000000,
+    owned_by: 'google-antigravity',
+  },
+  {
+    id: 'claude-sonnet-4-6',
+    object: 'model',
+    created: 1700000000,
+    owned_by: 'google-antigravity',
+  },
+  {
+    id: 'claude-opus-4-6-thinking',
+    object: 'model',
+    created: 1700000000,
+    owned_by: 'google-antigravity',
+  },
+  {
+    id: 'antigravity-gpt-oss-120b-medium',
+    object: 'model',
+    created: 1700000000,
+    owned_by: 'google-antigravity',
+  },
+  {
+    id: 'antigravity-gemini-3.5-flash-lite',
+    object: 'model',
+    created: 1700000000,
+    owned_by: 'google-antigravity',
+  },
+  {
+    id: 'antigravity-gemini-3-pro',
     object: 'model',
     created: 1700000000,
     owned_by: 'google-antigravity',

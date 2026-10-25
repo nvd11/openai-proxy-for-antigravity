@@ -101,28 +101,30 @@ flowchart TD
 - [x] 跑通 Server-Sent Events (SSE) 逐字推流 (`stream: true`)，完全符合 OpenAI Chunk 协议；
 - [x] 成功 Fork 代码至私人仓库 [nvd11/openai-proxy-for-antigravity](https://github.com/nvd11/openai-proxy-for-antigravity)。
 
-### 📍 Milestone 2: 双 Google AI Pro 账号轮询与配额调度（进行中 🟡）
-- [ ] 导入主人名下的第 2 个 Google AI Pro 账号凭据至 `antigravity-accounts.json`；
-- [ ] 验证多账号负载均衡（Round-Robin 轮询调度）；
-- [ ] 验证 429 Rate-Limit 自动检测与账号故障无感切换；
-- [ ] 验证 Web Admin Dashboard（`/admin`）的实时账号状态与调用监控。
+### 📍 Milestone 2: 双 Google AI Pro 账号轮询与配额调度（✅ 已达成）
+- [x] 成功导入主人名下的第 2 个 Google AI Pro 账号凭据 (`alice.h.y.he@gmail.com`) 至 `antigravity-accounts.json`，组成完全体双账号池；
+- [x] 排查并修复 `AccountManager` 构造逻辑中多账号追加被提前 `return` 阻断的底层 Bug；
+- [x] 验证多账号负载均衡（Round-Robin 轮询调度：实测在 `renee.y.x.luo@gmail.com` 与 `alice.h.y.he@gmail.com` 之间交替请求）；
+- [x] 实现并验证 429 Rate-Limit 自动检测与账号故障无感切换（单次调用在捕获 429 时自动内部 Failover 至备用账号，外部调用者零报错感知）；
+- [x] 验证 Web Admin Dashboard（`/admin` 及 `/admin/api/accounts`、`/admin/api/metrics`）的实时账号健康状态与调用监控。
 
-### 📍 Milestone 3: 模型版本矩阵对齐与命名规范化
-- [ ] 对齐 Google 最新模型映射：
-  - `gemini-3.8-flash-low`
-  - `gemini-3.8-flash-medium`
-  - `gemini-3.8-flash-high`
+### 📍 Milestone 3: 模型版本矩阵对齐与命名规范化（✅ 已达成）
+- [x] 实测抓取并对齐 Google 官方 Antigravity 真实可用模型矩阵：
+  - `gemini-3.8-flash-tiered` (完美承载 `gemini-3.8-flash` 及 `low / medium / high` 各梯度)
+  - `gemini-3-flash`
   - `claude-sonnet-4-6`
   - `claude-opus-4-6-thinking`
-- [ ] 修复老旧 `gemini-3-pro` 下线提示，平滑升级映射到当前生效的最新 Pro 内部代号；
-- [ ] 针对不同 Agent（OpenCode vs Claude Code）自定义默认模型别名。
+  - `gpt-oss-120b-medium`
+- [x] 修复老旧 `gemini-3-pro` 下线报错（Google 提示已 demised），平滑升级并优雅兜底至主人的 `gemini-3.8-flash`；
+- [x] 支持外部客户端直接使用标准模型名（无需强制前缀 `antigravity-`），自动识别并应用 Antigravity 头协议；
+- [x] 实测跑通非流式与 SSE 逐字推流 (`stream: true`)。
 
 ### 📍 Milestone 4: 云原生 GitOps + ArgoCD 生产部署 (Target: oci-free-arm-vm)
 - [ ] **容器化构建**：编写多阶段构建的 `Dockerfile`，支持 `linux/arm64` 原生构建，发布至 GitHub Container Registry (GHCR)；
 - [ ] **Kubernetes 声明式清单**：
   - 编写 `k8s/deployment.yaml`（固定 `nodeSelector: kubernetes.io/hostname: free-arm-vm`，利用 4C24G 充沛算力）；
-  - 编写 `k8s/service.yaml`（ClusterIP 暴露标准 3000 端口）；
-  - 编写 `k8s/secret.yaml`（凭证安全配置，通过 K8s Secret 或 SealedSecret 注入 `antigravity-accounts.json`）；
+  - 编写 `k8s/service.yaml`（严格采用 ClusterIP 隔离模式，禁止公网端口暴露，暂不上死锁 NetworkPolicy，兼顾安全性与终端单测便利）；
+  - 编写 `k8s/secret.yaml` / 凭证加载方案（通过 OCI Vault `gateman-vault` / `antigravity-accounts-credentials` 自动同步注入，实现机密 100% 托管进 Vault，零凭证污染 Git）；
 - [ ] **ArgoCD 持续交付纳管**：
   - 在 `aliyun-k3s` ArgoCD 控制面创建 Application（`openai-proxy-for-antigravity`）；
   - 绑定目标集群为 `tencent-dp1-cluster`，命名空间为 `ai-gateway` 或 `default`；

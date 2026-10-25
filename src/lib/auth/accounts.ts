@@ -252,31 +252,27 @@ export class AccountManager {
         ) % this.accounts.length;
       }
 
-      return;
-    }
-
-    // If we have stored accounts, check if we need to add the current auth
-    if (authFallback && this.accounts.length > 0) {
-      const authParts = parseRefreshParts(authFallback.refresh);
-      const hasMatching = this.accounts.some(acc => acc.parts.refreshToken === authParts.refreshToken);
-      if (!hasMatching && authParts.refreshToken) {
-        const now = nowMs();
-        const newAccount: ManagedAccount = {
-          index: this.accounts.length,
-          email: undefined,
-          addedAt: now,
-          lastUsed: 0,
-          parts: authParts,
-          access: authFallback.access,
-          expires: authFallback.expires,
-          rateLimitResetTimes: {},
-          touchedForQuota: {},
-        };
-        this.accounts.push(newAccount);
-        // Update indices to include the new account
-        this.currentAccountIndexByFamily.claude = Math.min(this.currentAccountIndexByFamily.claude, this.accounts.length - 1);
-        this.currentAccountIndexByFamily.gemini = Math.min(this.currentAccountIndexByFamily.gemini, this.accounts.length - 1);
+      // If we have stored accounts, check if we need to add the current auth
+      if (authFallback && authParts?.refreshToken) {
+        const hasMatching = this.accounts.some(acc => acc.parts.refreshToken === authParts.refreshToken);
+        if (!hasMatching) {
+          const now = nowMs();
+          const newAccount: ManagedAccount = {
+            index: this.accounts.length,
+            email: undefined,
+            addedAt: now,
+            lastUsed: 0,
+            parts: authParts,
+            access: authFallback.access,
+            expires: authFallback.expires,
+            rateLimitResetTimes: {},
+            touchedForQuota: {},
+          };
+          this.accounts.push(newAccount);
+        }
       }
+
+      return;
     }
 
     if (authFallback) {
