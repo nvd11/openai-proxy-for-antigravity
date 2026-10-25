@@ -57,6 +57,98 @@ export default async function chatRoutes(server: FastifyInstance) {
           hasTools: Boolean(openaiReq.tools && openaiReq.tools.length > 0),
         });
 
+        // Forward non-Antigravity models (e.g. DeepSeek, Kimi, GLM, hy3, Luna) to external upstream
+        if (!adapter.isAntigravityModel(openaiReq.model)) {
+          const upstreamUrl = process.env.A6_UPSTREAM_URL || 'https://api.a6api.com/v1/chat/completions';
+          const upstreamKey = process.env.A6_API_KEY || (typeof request.headers['authorization'] === 'string' ? request.headers['authorization'].replace(/^Bearer\s+/i, '') : '');
+
+          log.info('Forwarding non-Antigravity model to external upstream', {
+            model: openaiReq.model,
+            upstreamUrl,
+            stream: openaiReq.stream,
+          });
+
+          const upstreamHeaders: Record<string, string> = {
+            'Content-Type': 'application/json',
+          };
+          if (upstreamKey) {
+            upstreamHeaders['Authorization'] = `Bearer ${upstreamKey}`;
+          }
+
+          const extResponse = await fetch(upstreamUrl, {
+            method: 'POST',
+            headers: upstreamHeaders,
+            body: JSON.stringify(openaiReq),
+          });
+
+          if (!extResponse.ok) {
+            const errorText = await extResponse.text().catch(() => '');
+            log.error('External upstream error', {
+              status: extResponse.status,
+              statusText: extResponse.statusText,
+              body: errorText.slice(0, 1000),
+              url: upstreamUrl,
+            });
+
+            metricsService.recordRequest(openaiReq.model, Date.now() - startTime, 'error');
+            return reply.status(extResponse.status).send({
+              error: {
+                message: `Upstream error: ${errorText || extResponse.statusText}`,
+                type: 'upstream_error',
+              },
+            });
+          }
+
+          if (openaiReq.stream) {
+            reply.raw.writeHead(200, {
+              'Content-Type': 'text/event-stream',
+              'Cache-Control': 'no-cache',
+              'Connection': 'keep-alive',
+            });
+
+            let streamBuffer = '';
+            if (extResponse.body) {
+              const reader = extResponse.body.getReader();
+              const decoder = new TextDecoder();
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                streamBuffer += decoder.decode(value, { stream: true });
+                reply.raw.write(value);
+              }
+            }
+            reply.raw.end();
+
+            const duration = Date.now() - startTime;
+            metricsService.recordRequest(openaiReq.model, duration, 'success');
+            logService.logRequest(
+              openaiReq.model,
+              'stream',
+              duration,
+              'success',
+              undefined,
+              openaiReq,
+              streamBuffer
+            );
+            return;
+          }
+
+          const responseData = await extResponse.json();
+          const duration = Date.now() - startTime;
+          metricsService.recordRequest(openaiReq.model, duration, 'success');
+          logService.logRequest(
+            openaiReq.model,
+            'completion',
+            duration,
+            'success',
+            (responseData as any)?.usage?.total_tokens,
+            openaiReq,
+            responseData
+          );
+
+          return reply.send(responseData);
+        }
+
         // Failover retry loop across accounts
         const totalAccounts = await accountService.getAccountCount();
         const maxAttempts = Math.max(1, totalAccounts);

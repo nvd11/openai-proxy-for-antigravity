@@ -244,6 +244,21 @@ export class OpenAIToAntigravityAdapter {
   }
 
   /**
+   * Checks if a model should be routed to Google Antigravity
+   */
+  isAntigravityModel(model: string): boolean {
+    const { baseModel } = this.extractModelInfo(model);
+    const lower = baseModel.toLowerCase();
+
+    if (lower.startsWith('antigravity-')) return true;
+    if (lower.includes('gemini')) return true;
+    if (lower.includes('claude') || lower.includes('sonnet') || lower.includes('opus')) return true;
+    if (lower.includes('gpt-oss')) return true;
+
+    return false;
+  }
+
+  /**
    * Extracts the base model name and any thinking suffix
    */
   extractModelInfo(model: string): { baseModel: string; thinkingSuffix?: string } {
