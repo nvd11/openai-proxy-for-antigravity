@@ -116,31 +116,22 @@ interface AntigravityRequest {
 
 export class OpenAIToAntigravityAdapter {
   /**
-   * Fields that Gemini/Antigravity API rejects in JSON schemas
+   * Fields permitted by Google Gemini/Antigravity API Schema proto
    */
-  private readonly UNSUPPORTED_SCHEMA_FIELDS = new Set([
-    "additionalProperties",
-    "$schema",
-    "$id",
-    "$comment",
-    "$ref",
-    "$defs",
-    "definitions",
-    "const",
-    "contentMediaType",
-    "contentEncoding",
-    "if",
-    "then",
-    "else",
-    "not",
-    "patternProperties",
-    "unevaluatedProperties",
-    "unevaluatedItems",
-    "dependentRequired",
-    "dependentSchemas",
-    "propertyNames",
-    "minContains",
-    "maxContains",
+  private readonly ALLOWED_SCHEMA_FIELDS = new Set([
+    "type",
+    "format",
+    "description",
+    "nullable",
+    "enum",
+    "maxItems",
+    "minItems",
+    "properties",
+    "required",
+    "items",
+    "anyOf",
+    "oneOf",
+    "allOf",
   ]);
 
   /**
@@ -161,9 +152,9 @@ export class OpenAIToAntigravityAdapter {
       }
     }
 
-    // Process fields
+    // Process fields, strictly keeping only fields supported by Gemini protobuf
     for (const [key, value] of Object.entries(inputSchema)) {
-      if (this.UNSUPPORTED_SCHEMA_FIELDS.has(key)) {
+      if (!this.ALLOWED_SCHEMA_FIELDS.has(key)) {
         continue;
       }
 
@@ -297,6 +288,7 @@ export class OpenAIToAntigravityAdapter {
   } {
     const contents: AntigravityContent[] = [];
     let systemText = '';
+    const toolCallNames = new Map<string, string>();
 
     for (const msg of messages) {
       if (msg.role === 'system') {
@@ -331,6 +323,9 @@ export class OpenAIToAntigravityAdapter {
 
         if (msg.tool_calls) {
           for (const toolCall of msg.tool_calls) {
+            if (toolCall.id && toolCall.function?.name) {
+              toolCallNames.set(toolCall.id, toolCall.function.name);
+            }
             try {
               const args = JSON.parse(toolCall.function.arguments);
               parts.push({
@@ -352,27 +347,31 @@ export class OpenAIToAntigravityAdapter {
           contents.push({ role: 'model', parts });
         }
       } else if (msg.role === 'tool') {
-        // Tool results
+        // Tool results - protobuf requires functionResponse.response to be a Struct (Object), NEVER an Array
+        const toolName = msg.name || (msg.tool_call_id ? toolCallNames.get(msg.tool_call_id) : undefined) || 'tool';
+        let responseObj: Record<string, unknown>;
+
         try {
-          const contentStr = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
-          const response = contentStr ? JSON.parse(contentStr) : {};
-          contents.push({
-            role: 'user',
-            parts: [{
-              functionResponse: {
-                name: msg.name || 'unknown',
-                response,
-              },
-            }],
-          });
+          const raw = typeof msg.content === 'string' ? JSON.parse(msg.content) : msg.content;
+          if (typeof raw === 'object' && raw !== null && !Array.isArray(raw)) {
+            responseObj = raw as Record<string, unknown>;
+          } else {
+            responseObj = { output: raw };
+          }
         } catch {
-          // Fallback: treat as text
           const contentStr = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
-          contents.push({
-            role: 'user',
-            parts: [{ text: contentStr || '' }],
-          });
+          responseObj = { output: contentStr || '' };
         }
+
+        contents.push({
+          role: 'user',
+          parts: [{
+            functionResponse: {
+              name: toolName,
+              response: responseObj,
+            },
+          }],
+        });
       }
     }
 
