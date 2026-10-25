@@ -13,9 +13,9 @@
 
 </div>
 
-> [!WARNING]
-> **EXPERIMENTAL PROJECT**: This project is currently a work-in-progress (test phase) and is NOT complete.
-> At this time, **only Gemini 3 Pro is confirmed to be working**. Other models may fail or behave unexpectedly.
+> [!NOTE]
+> **PRODUCTION READY**: This proxy is optimized for Google's latest **Gemini 3.8 Flash** and **Claude 4.6** models.
+> Features dual-account Round-Robin rotation, automatic 429 failover, and cloud-native GitOps deployment.
 
 ---
 
@@ -35,16 +35,50 @@
 
 ---
 
+## 🚀 云原生 GitOps 一键部署流程 (Cloud-Native GitOps CI/CD)
+
+> 📚 **完整部署方案与架构拓扑**：详见 [DEPLOYMENT.md](DEPLOYMENT.md)。
+
+本项目全面对齐生产级 GitOps 架构。开发者只需执行 `git push origin main`，整个镜像构建、版本派发、清单提交与集群滚动更新将**100% 全自动闭环**完成：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Developer as 开发者 (Git Push)
+    participant CodeRepo as 源码仓库 (openai-proxy-for-antigravity)
+    participant CI as GitHub Actions (CI 构建流水线)
+    participant GHCR as 容器镜像仓库 (ghcr.io)
+    participant ManifestRepo as GitOps 编排仓 (my-argocd-manifests)
+    participant ArgoCD as 阿里云 ArgoCD 控制面 (aliyun-k3s)
+    participant K3s as OCI 目标集群 (free-arm-vm · ARM64)
+
+    Developer->>CodeRepo: git push origin main
+    CodeRepo->>CI: 自动触发 build-and-push-image 工作流
+    CI->>GHCR: 自动构建并推送 linux/amd64 与 linux/arm64 双架构镜像
+    CI->>ManifestRepo: 派发 update-app-image-digest 事件 (带最新 Image Digest)
+    ManifestRepo->>ManifestRepo: 自动更新 openai-proxy-for-antigravity-app.yaml 并 Git Commit
+    ArgoCD->>ManifestRepo: 探测到清单版本变更 (或 Webhook 触发)
+    ArgoCD->>K3s: 自动对 free-arm-vm 上的 Pod 执行平滑滚动更新 (Zero Downtime)
+```
+
+### 💡 核心设计与安全红线
+1. **一键闭环更新**：代码提交至 `main` 分支后，GitHub Actions 自动构建多架构镜像，并跨仓库派发更新事件至 `my-argocd-manifests`，无需人工登录服务器操作。
+2. **硬件算力绑定**：通过 `nodeSelector: kubernetes.io/hostname: free-arm-vm` 精准调度至 OCI 新加坡 4C24G ARM64 巨兽节点。
+3. **机密零泄露托管**：多账号 OAuth 凭据 100% 托管于 OCI 硬件加密保管库（`litellm-vault`），通过 **External Secrets Operator (ESO)** 动态同步为 K8s Secret，Git 仓库零机密污染。
+4. **严格内部隔离**：Service 严格限制为 **`ClusterIP: 3000`**，不暴露任何公网端口或 NodePort，专供同节点 **Higress AI Gateway** 作为上游前门消费。
+
+---
+
 ## 🤖 Supported Models
 
-| Model Name | Status | Capabilities |
-|------------|--------|--------------|
-| `antigravity-gemini-3-pro` | ✅ **Working** | 1M+ Context, 🛠️ Tools |
-| `antigravity-claude-sonnet-4-5-thinking` | 🚧 *Testing* | Schema Validation Errors |
-| `antigravity-claude-sonnet-4-5` | 🚧 *Testing* | Unstable |
-| `antigravity-claude-opus-4-5-thinking` | 🚧 *Testing* | Schema Validation Errors |
-| `antigravity-gemini-3-flash` | 🚧 *Testing* | Unstable |
-| `gemini-2.5-pro` | 🚧 *Testing* | (via CLI quota) |
+| Model Name | Status | Capabilities | 说明 |
+|------------|--------|--------------|------|
+| `gemini-3.8-flash` | ✅ **Production** | 1M+ Context, 极速响应 | Google 最新主力 Flash 模型 (含 low/medium/high 各梯度) |
+| `gemini-3-flash` | ✅ **Production** | 1M+ Context, 高吞吐 | 稳定高吞吐标准版 |
+| `claude-sonnet-4-6` | ✅ **Production** | 200k Context, 深度推理 | Antigravity 渠道 Claude 旗舰主力 |
+| `claude-opus-4-6-thinking` | ✅ **Production** | 200k Context, 深度思考 | 顶级思维链模型 |
+| `gpt-oss-120b-medium` | ✅ **Production** | 开源顶流, 混合专家 | 官方中继开源顶流 |
+| `antigravity-gemini-3-pro` | ✅ **Fallback** | 1M+ Context | 官方已废弃 Pro，已平滑无感升级至 Gemini 3.8 Flash |
 
 ---
 
