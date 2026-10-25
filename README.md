@@ -67,6 +67,29 @@ sequenceDiagram
 3. **机密零泄露托管**：多账号 OAuth 凭据 100% 托管于 OCI 硬件加密保管库（`litellm-vault`），通过 **External Secrets Operator (ESO)** 动态同步为 K8s Secret，Git 仓库零机密污染。
 4. **严格内部隔离**：Service 严格限制为 **`ClusterIP: 3000`**，不暴露任何公网端口或 NodePort，专供同节点 **Higress AI Gateway** 作为上游前门消费。
 
+### 🌐 生产集群访问地址与端口 (Deployment Topology)
+
+| 访问途径 | 完整基准 URL (Base URL) | 目标端口 | 说明 |
+|---|---|---|---|
+| **K8s 集群内标准 DNS**<br>*(推荐·Higress 上游专用)* | `http://openai-proxy-for-antigravity.llm-system.svc.cluster.local:3000` | **`3000`** | 最优内网路由，同机 Higress 访问延迟 **< 0.2ms** |
+| **K8s Service ClusterIP** | `http://10.43.250.150:3000` | **`3000`** | 集群内部稳定虚拟 IP |
+| **宿主机本地单测** | `http://10.43.250.150:3000`<br>或 Pod 直连: `http://10.42.2.38:3000` | **`3000`** | 登录 `free-arm-vm` 宿主机时通过 `curl` 调试使用 |
+| **集群外公网访问** | 🚫 **物理阻断 (无对外暴露)** | 无 | **安全隔离**：无公网 IP/端口，物理杜绝外部越权调用 |
+
+> 📌 **标准 OpenAI 根路径 (OpenAI Base Path)**：
+> `http://openai-proxy-for-antigravity.llm-system.svc.cluster.local:3000/v1`
+
+### 📡 支持的 API Endpoint 清单 (Supported Endpoints)
+
+| Method | Endpoint | 协议/格式 | 说明 |
+|---|---|---|---|
+| `POST` | `/v1/chat/completions` | OpenAI JSON / SSE 流式 | **核心对话补全**。支持非流式与 `stream: true` 逐字推流，内置双账号 Round-Robin 轮询与 429 自动无感 Failover |
+| `GET` | `/v1/models` | OpenAI Models JSON | **模型目录查询**。返回当前代理支持的全量模型矩阵 |
+| `GET` | `/health` | JSON 状态 | **健康检查探针**。K8s 存活/就绪探针目标，返回双账号可用数量与系统健康度 |
+| `GET` | `/admin` | HTML5 Dashboard | **可视化监控看板**。直观查看双账号健康状态、配额消耗、最近调用流水与平均耗时 |
+| `GET` | `/admin/api/accounts` | JSON 状态 | **账号状态 API**。查询各账号最后使用时间、冷却状态与重置倒计时 |
+| `GET` | `/admin/api/metrics` | JSON 统计 | **度量监控 API**。统计各模型请求数（`requestsByModel`）、平均响应耗时与成功率 |
+
 ---
 
 ## 🤖 Supported Models
