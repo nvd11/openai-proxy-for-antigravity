@@ -10,6 +10,7 @@ import {
   GEMINI_CLI_HEADERS,
   GEMINI_CLI_ENDPOINT,
   ANTIGRAVITY_SYSTEM_INSTRUCTION,
+  SKIP_THOUGHT_SIGNATURE,
   type HeaderStyle,
 } from '../lib/constants.js';
 
@@ -89,6 +90,8 @@ interface AntigravityContent {
   role: 'user' | 'model';
   parts: Array<{
     text?: string;
+    thought?: boolean;
+    thoughtSignature?: string;
     functionCall?: { name: string; args: Record<string, unknown> };
     functionResponse?: { name: string; response: Record<string, unknown> };
   }>;
@@ -328,11 +331,13 @@ export class OpenAIToAntigravityAdapter {
             }
             try {
               const args = JSON.parse(toolCall.function.arguments);
+              const customSig = (toolCall as Record<string, unknown>).thoughtSignature || (toolCall as Record<string, unknown>).thought_signature;
               parts.push({
                 functionCall: {
                   name: toolCall.function.name,
                   args,
                 },
+                thoughtSignature: typeof customSig === 'string' && customSig ? customSig : SKIP_THOUGHT_SIGNATURE,
               });
             } catch (e) {
               log.warn('Failed to parse tool call arguments', {
