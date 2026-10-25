@@ -18,56 +18,6 @@ interface ChatRequest extends FastifyRequest {
   body: OpenAIRequest;
 }
 
-async function sendDirectAuditLog(params: {
-  requestId: string;
-  model: string;
-  accountEmail?: string;
-  promptTokens: number;
-  completionTokens: number;
-  totalTokens: number;
-  durationMs: number;
-  statusCode: number;
-  errorMsg?: string | null;
-  prompt: any;
-  response: any;
-}) {
-  const dashboardUrl = process.env.DASHBOARD_INTERNAL_URL || 'http://higress-dashboard-backend.higress-system.svc.cluster.local:4000/api/v1/internal/audit-log';
-  try {
-    const payload = {
-      request_id: params.requestId,
-      api_key_alias: 'direct-client',
-      model_requested: params.model,
-      model_used: params.model,
-      provider: 'openai-proxy-for-antigravity',
-      provider_key_alias: params.accountEmail || 'google-ai-pro',
-      prompt_tokens: params.promptTokens,
-      completion_tokens: params.completionTokens,
-      reasoning_tokens: 0,
-      cache_read_tokens: 0,
-      total_tokens: params.totalTokens,
-      prompt_unit_price_usd: 0.75,
-      cache_unit_price_usd: 0.075,
-      completion_unit_price_usd: 3.75,
-      cost_usd: (params.promptTokens * 0.75 + params.completionTokens * 3.75) / 1_000_000,
-      cost_cny: ((params.promptTokens * 0.75 + params.completionTokens * 3.75) / 1_000_000) * 7.23,
-      fx_rate: 7.23,
-      latency_ms: params.durationMs,
-      status_code: params.statusCode,
-      error_msg: params.errorMsg || null,
-      created_at: new Date().toISOString(),
-      prompt: typeof params.prompt === 'string' ? params.prompt : JSON.stringify(params.prompt),
-      response: typeof params.response === 'string' ? params.response : JSON.stringify(params.response),
-    };
-    await fetch(dashboardUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-  } catch (err) {
-    log.debug('Failed to send direct audit log to dashboard', { error: String(err) });
-  }
-}
-
 export default async function chatRoutes(server: FastifyInstance) {
   server.post<{ Body: OpenAIRequest }>(
     '/chat/completions',
@@ -323,8 +273,6 @@ export default async function chatRoutes(server: FastifyInstance) {
             'Content-Type': 'text/event-stream',
             'Cache-Control': 'no-cache',
             'Connection': 'keep-alive',
-            'x-antigravity-account': currentAccount ? currentAccount.email : '',
-            'x-antigravity-account-index': currentAccount ? String(currentAccount.index) : '',
           });
 
           let streamBuffer = '';
@@ -350,51 +298,11 @@ export default async function chatRoutes(server: FastifyInstance) {
             streamBuffer
           );
 
-          if (!request.headers['x-request-id']) {
-            let promptTokens = 0;
-            let completionTokens = 0;
-            let totalTokens = 0;
-            const lines = streamBuffer.split('\n');
-            for (let i = lines.length - 1; i >= 0; i--) {
-              const line = lines[i].trim();
-              if (line.startsWith('data: ') && line.includes('"usage"')) {
-                try {
-                  const parsed = JSON.parse(line.slice(6));
-                  if (parsed.usage) {
-                    promptTokens = parsed.usage.prompt_tokens || 0;
-                    completionTokens = parsed.usage.completion_tokens || 0;
-                    totalTokens = parsed.usage.total_tokens || (promptTokens + completionTokens);
-                    break;
-                  }
-                } catch {
-                  // ignore
-                }
-              }
-            }
-            sendDirectAuditLog({
-              requestId: `direct-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-              model: openaiReq.model,
-              accountEmail: currentAccount?.email,
-              promptTokens,
-              completionTokens,
-              totalTokens,
-              durationMs: duration,
-              statusCode: 200,
-              prompt: openaiReq,
-              response: streamBuffer,
-            });
-          }
-
           return;
         }
 
         // Handle non-streaming response
         const openaiResponse = await adapter.convertResponse(response, openaiReq.model);
-
-        if (currentAccount) {
-          reply.header('x-antigravity-account', currentAccount.email);
-          reply.header('x-antigravity-account-index', String(currentAccount.index));
-        }
 
         // Record metrics
         const duration = Date.now() - startTime;
@@ -408,21 +316,6 @@ export default async function chatRoutes(server: FastifyInstance) {
           openaiReq,
           openaiResponse
         );
-
-        if (!request.headers['x-request-id']) {
-          sendDirectAuditLog({
-            requestId: `direct-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-            model: openaiReq.model,
-            accountEmail: currentAccount?.email,
-            promptTokens: openaiResponse.usage?.prompt_tokens || 0,
-            completionTokens: openaiResponse.usage?.completion_tokens || 0,
-            totalTokens: openaiResponse.usage?.total_tokens || 0,
-            durationMs: duration,
-            statusCode: 200,
-            prompt: openaiReq,
-            response: openaiResponse,
-          });
-        }
 
         return reply.send(openaiResponse);
 
