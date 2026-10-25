@@ -7,55 +7,7 @@ import type { FastifyInstance } from 'fastify';
 
 const AVAILABLE_MODELS = [
   {
-    id: 'antigravity-gemini-3.8-flash',
-    object: 'model',
-    created: 1700000000,
-    owned_by: 'google-antigravity',
-  },
-  {
-    id: 'antigravity-gemini-3.8-flash-medium',
-    object: 'model',
-    created: 1700000000,
-    owned_by: 'google-antigravity',
-  },
-  {
-    id: 'antigravity-gemini-3.8-flash-low',
-    object: 'model',
-    created: 1700000000,
-    owned_by: 'google-antigravity',
-  },
-  {
-    id: 'antigravity-gemini-3.8-flash-high',
-    object: 'model',
-    created: 1700000000,
-    owned_by: 'google-antigravity',
-  },
-  {
     id: 'gemini-3.8-flash',
-    object: 'model',
-    created: 1700000000,
-    owned_by: 'google-antigravity',
-  },
-  {
-    id: 'gemini-3.8-flash-medium',
-    object: 'model',
-    created: 1700000000,
-    owned_by: 'google-antigravity',
-  },
-  {
-    id: 'antigravity-gemini-3-flash',
-    object: 'model',
-    created: 1700000000,
-    owned_by: 'google-antigravity',
-  },
-  {
-    id: 'antigravity-claude-sonnet-4-6',
-    object: 'model',
-    created: 1700000000,
-    owned_by: 'google-antigravity',
-  },
-  {
-    id: 'antigravity-claude-opus-4-6-thinking',
     object: 'model',
     created: 1700000000,
     owned_by: 'google-antigravity',
@@ -73,52 +25,10 @@ const AVAILABLE_MODELS = [
     owned_by: 'google-antigravity',
   },
   {
-    id: 'antigravity-gpt-oss-120b-medium',
+    id: 'gpt-oss-120b-medium',
     object: 'model',
     created: 1700000000,
     owned_by: 'google-antigravity',
-  },
-  {
-    id: 'antigravity-gemini-3.5-flash-lite',
-    object: 'model',
-    created: 1700000000,
-    owned_by: 'google-antigravity',
-  },
-  {
-    id: 'antigravity-gemini-3-pro',
-    object: 'model',
-    created: 1700000000,
-    owned_by: 'google-antigravity',
-  },
-  {
-    id: 'antigravity-claude-sonnet-4-5',
-    object: 'model',
-    created: 1700000000,
-    owned_by: 'google-antigravity',
-  },
-  {
-    id: 'antigravity-claude-sonnet-4-5-thinking',
-    object: 'model',
-    created: 1700000000,
-    owned_by: 'google-antigravity',
-  },
-  {
-    id: 'antigravity-claude-opus-4-5-thinking',
-    object: 'model',
-    created: 1700000000,
-    owned_by: 'google-antigravity',
-  },
-  {
-    id: 'gemini-2.5-flash',
-    object: 'model',
-    created: 1700000000,
-    owned_by: 'google-gemini-cli',
-  },
-  {
-    id: 'gemini-2.5-pro',
-    object: 'model',
-    created: 1700000000,
-    owned_by: 'google-gemini-cli',
   },
 ];
 

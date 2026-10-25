@@ -96,12 +96,10 @@ sequenceDiagram
 
 | Model Name | Status | Capabilities | 说明 |
 |------------|--------|--------------|------|
-| `gemini-3.8-flash` | ✅ **Production** | 1M+ Context, 极速响应 | Google 最新主力 Flash 模型 (含 low/medium/high 各梯度) |
-| `gemini-3-flash` | ✅ **Production** | 1M+ Context, 高吞吐 | 稳定高吞吐标准版 |
+| `gemini-3.8-flash` | ✅ **Production** | 1M+ Context, 极速响应 | Google 最新主力 Flash 模型，双账号自动轮询 |
 | `claude-sonnet-4-6` | ✅ **Production** | 200k Context, 深度推理 | Antigravity 渠道 Claude 旗舰主力 |
 | `claude-opus-4-6-thinking` | ✅ **Production** | 200k Context, 深度思考 | 顶级思维链模型 |
-| `gpt-oss-120b-medium` | ✅ **Production** | 开源顶流, 混合专家 | 官方中继开源顶流 |
-| `antigravity-gemini-3-pro` | ✅ **Fallback** | 1M+ Context | 官方已废弃 Pro，已平滑无感升级至 Gemini 3.8 Flash |
+| `gpt-oss-120b-medium` | ✅ **Production** | 开源顶流, 混合专家 | 官方中继开源顶流 MoE |
 
 ---
 
