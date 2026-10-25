@@ -765,8 +765,6 @@ export class OpenAIToAntigravityAdapter {
     const reader = stream.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    let latestUsage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | null = null;
-    let emittedUsage = false;
 
     log.info('Starting stream conversion', { requestedModel });
 
@@ -795,58 +793,19 @@ export class OpenAIToAntigravityAdapter {
 
           const data = line.slice(6);
           if (data === '[DONE]') {
-            if (latestUsage && !emittedUsage) {
-              emittedUsage = true;
-              const usageChunk = {
-                id: `chatcmpl-${Date.now()}`,
-                object: 'chat.completion.chunk',
-                created: Math.floor(Date.now() / 1000),
-                model: requestedModel,
-                choices: [],
-                usage: latestUsage,
-              };
-              yield `data: ${JSON.stringify(usageChunk)}\n\n`;
-            }
             yield 'data: [DONE]\n\n';
             continue;
           }
 
           try {
             const parsed = JSON.parse(data);
-            const rawUsage = parsed.response?.usageMetadata || parsed.usageMetadata;
-            if (rawUsage) {
-              latestUsage = {
-                prompt_tokens: rawUsage.promptTokenCount || 0,
-                completion_tokens: rawUsage.candidatesTokenCount || 0,
-                total_tokens: rawUsage.totalTokenCount || 0,
-              };
-            }
-
             const openaiChunk = this.convertStreamChunk(parsed, requestedModel);
-            if (latestUsage && openaiChunk.choices[0]?.finish_reason) {
-              (openaiChunk as any).usage = latestUsage;
-            }
-
             yield `data: ${JSON.stringify(openaiChunk)}\n\n`;
           } catch (e) {
             log.warn('Failed to parse stream chunk', { error: String(e), data: data.slice(0, 200) });
           }
         }
       }
-
-      if (latestUsage && !emittedUsage) {
-        emittedUsage = true;
-        const usageChunk = {
-          id: `chatcmpl-${Date.now()}`,
-          object: 'chat.completion.chunk',
-          created: Math.floor(Date.now() / 1000),
-          model: requestedModel,
-          choices: [],
-          usage: latestUsage,
-        };
-        yield `data: ${JSON.stringify(usageChunk)}\n\n`;
-      }
-      yield 'data: [DONE]\n\n';
     } catch (error) {
       log.error('Stream reading error', { error: String(error) });
       throw error;
@@ -863,23 +822,6 @@ export class OpenAIToAntigravityAdapter {
     const firstCandidate = candidates[0];
 
     let delta: any = { role: 'assistant' };
-
-    let finishReason: string | null = null;
-    if (firstCandidate?.finishReason) {
-      const fr = firstCandidate.finishReason;
-      const hasToolCall = firstCandidate?.content?.parts?.some((p: any) => p.functionCall);
-      if (hasToolCall) {
-        finishReason = 'tool_calls';
-      } else if (fr === 'STOP') {
-        finishReason = 'stop';
-      } else if (fr === 'MAX_TOKENS') {
-        finishReason = 'length';
-      } else if (fr === 'SAFETY') {
-        finishReason = 'content_filter';
-      } else {
-        finishReason = fr.toLowerCase();
-      }
-    }
 
     if (firstCandidate?.content?.parts) {
       for (const part of firstCandidate.content.parts) {
@@ -910,7 +852,7 @@ export class OpenAIToAntigravityAdapter {
       choices: [{
         index: 0,
         delta,
-        finish_reason: finishReason,
+        finish_reason: null,
       }],
     };
   }
