@@ -8,6 +8,7 @@ import { formatRefreshParts } from '../lib/auth/auth.js';
 import { loadAccounts } from '../lib/auth/storage.js';
 import { createLogger } from '../lib/logger.js';
 import type { OAuthAuthDetails } from '../lib/types.js';
+import { adapter } from '../adapters/openai-adapter.js';
 
 const log = createLogger('account-service');
 
@@ -86,13 +87,14 @@ export class AccountService {
     
     // Determine model family from model name
     const family = model.toLowerCase().includes('claude') ? 'claude' : 'gemini';
-    const headerStyle = model.toLowerCase().includes('antigravity') ? 'antigravity' : 'gemini-cli';
+    const headerStyle = adapter.getHeaderStyle(model);
+    const strategy = (process.env.ROTATION_STRATEGY as any) || 'round-robin';
 
     return manager.getCurrentOrNextForFamily(
       family as 'claude' | 'gemini',
       model,
-      'hybrid', // Default strategy
-      headerStyle as 'antigravity' | 'gemini-cli',
+      strategy,
+      headerStyle,
       false, // pid_offset_enabled
     );
   }
@@ -100,13 +102,13 @@ export class AccountService {
   async markRateLimited(account: ManagedAccount, delayMs: number, model: string): Promise<void> {
     const manager = await this.getAccountManager();
     const family = model.toLowerCase().includes('claude') ? 'claude' : 'gemini';
-    const headerStyle = model.toLowerCase().includes('antigravity') ? 'antigravity' : 'gemini-cli';
+    const headerStyle = adapter.getHeaderStyle(model);
 
     manager.markRateLimited(
       account,
       delayMs,
       family as 'claude' | 'gemini',
-      headerStyle as 'antigravity' | 'gemini-cli',
+      headerStyle,
       model
     );
 
