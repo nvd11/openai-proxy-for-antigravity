@@ -101,6 +101,32 @@ sequenceDiagram
 | `claude-opus-4-6-thinking` | ✅ **Production** | 200k Context, 深度思考 | 顶级思维链模型 |
 | `gpt-oss-120b-medium` | ✅ **Production** | 开源顶流, 混合专家 | 官方中继开源顶流 MoE |
 
+### 🧠 深度思考与推理强度配置 (OpenCode & Reasoning Conventions)
+
+本代理完美支持 **OpenCode 习惯** 与 OpenAI / Anthropic 思考预算规范，支持通过**模型后缀**或**请求体参数**自由调配思考程度：
+
+#### 1. 模型名称后缀 (Model Suffixes)
+直接在模型名称后追加思考层级后缀，代理会自动解析并剥离底模：
+- `:low` (2,048 tokens 思考预算，轻量推理)
+- `:medium` / `:med` (8,192 tokens 思考预算，标准平衡)
+- `:high` (16,384 tokens 思考预算，深度探索)
+- `:max` / `:ultra` (32,768 tokens 思考预算，极限推演)
+- `:none` / `:off` / `:0` (禁用思考，直接输出)
+- 自定义 Token 数值：如 `:4096` 或 `:16k`、`:32k`
+
+> 示例：`"model": "gemini-3.8-flash:high"` 或 `"model": "claude-sonnet-4-6:low"`
+
+#### 2. 请求体参数 (Request Body Parameters)
+支持标准的 OpenAI / Anthropic 参数：
+- **OpenAI 规范**：`"reasoning_effort": "low" | "medium" | "high" | "none"`
+- **Anthropic / OpenCode 规范**：`"thinking": { "type": "enabled", "budget_tokens": 8192 }`
+- **直接预算参数**：`"thinking_budget": 4096`
+
+#### 3. 思维链输出格式 (Reasoning Output)
+代理遵循行业标准，将模型思考过程与最终回答彻底解耦：
+- **完整响应**：思考过程存入 `message.reasoning_content`，最终回答存入 `message.content`。
+- **流式推送 (SSE)**：逐字推流时思考部分推入 `delta.reasoning_content`，回答部分推入 `delta.content`，完美适配 OpenCode 的折叠思考框展示。
+
 ---
 
 ## ⚡ Quick Start
