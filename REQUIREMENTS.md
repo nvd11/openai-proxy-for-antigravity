@@ -119,19 +119,23 @@ flowchart TD
 - [x] 支持外部客户端直接使用标准模型名（无需强制前缀 `antigravity-`），自动识别并应用 Antigravity 头协议；
 - [x] 实测跑通非流式与 SSE 逐字推流 (`stream: true`)。
 
-### 📍 Milestone 4: 云原生 GitOps + ArgoCD 生产部署 (Target: oci-free-arm-vm)
-- [ ] **容器化构建**：编写多阶段构建的 `Dockerfile`，支持 `linux/arm64` 原生构建，发布至 GitHub Container Registry (GHCR)；
-- [ ] **Kubernetes 声明式清单**：
-  - 编写 `k8s/deployment.yaml`（固定 `nodeSelector: kubernetes.io/hostname: free-arm-vm`，利用 4C24G 充沛算力）；
-  - 编写 `k8s/service.yaml`（严格采用 ClusterIP 隔离模式，禁止公网端口暴露，暂不上死锁 NetworkPolicy，兼顾安全性与终端单测便利）；
-  - 编写 `k8s/secret.yaml` / 凭证加载方案（通过 OCI Vault `gateman-vault` / `antigravity-accounts-credentials` 自动同步注入，实现机密 100% 托管进 Vault，零凭证污染 Git）；
-- [ ] **ArgoCD 持续交付纳管**：
-  - 在 `aliyun-k3s` ArgoCD 控制面创建 Application（`openai-proxy-for-antigravity`）；
-  - 绑定目标集群为 `tencent-dp1-cluster`，命名空间为 `ai-gateway` 或 `default`；
-  - 启用自动同步（Automated Sync & Self-Heal），实现 GitOps 持续部署；
+### 📍 Milestone 4: 云原生 GitOps + ArgoCD 生产部署 (Target: oci-free-arm-vm · ✅ 已达成)
+- [x] **容器化构建**：编写多阶段构建的 [`Dockerfile`](file:///home/gateman/projects/openai-proxy-for-antigravity/Dockerfile)，支持 `linux/arm64` 与 `linux/amd64` 双架构，优化剥离编译依赖，成功发布至 GitHub Container Registry (`ghcr.io/nvd11/openai-proxy-for-antigravity:latest`)；
+- [x] **Kubernetes 声明式清单与机密管理**：
+  - 复用公共底座 `charts/generic-web-service-v2`；
+  - 固定调度至 OCI 新加坡 ARM 巨兽（`nodeSelector: kubernetes.io/hostname: free-arm-vm`）；
+  - 严格采用 **ClusterIP 模式**（端口 3000，不分配外部公网 IP，不建 NodePort/公网 Ingress，杜绝公网越权访问）；
+  - 凭据全生命周期由 **OCI Vault**（`litellm-vault` & `gateman-vault`）托管，通过 **External Secrets Operator** 自动同步至 `llm-system/antigravity-proxy-credentials`，实现 0 凭据污染 Git；
+  - 攻克只读文件系统挂载（EROFS）兼容，内存态无锁轮询调度；
+- [x] **ArgoCD 持续交付纳管**：
+  - 在 `aliyun-k3s` ArgoCD 控制面创建 Application（[`openai-proxy-for-antigravity`](file:///home/gateman/my-argocd-manifests/argocd-apps/openai-proxy-for-antigravity-app.yaml)）；
+  - 纳管目标集群为 `tencent-dp1-cluster`，命名空间为 `llm-system`；
+  - 启用自动同步（Automated Sync & Self-Heal），成功拉起 Pod 并完成双账号 Round-Robin 交互单测！
+
+### 📍 Milestone 5: Higress 网关上游对接与群芳全面唤醒（进行中 🟡）
 - [ ] **Higress 极致近场接入**：
-  - 在 `free-arm-vm` 上的 **Higress AI Gateway** 中配置路由 `gemini-pro-agy`，上游直接指向集群内 DNS `http://openai-proxy-for-antigravity.default.svc.cluster.local:3000/v1`；
-  - 实测 Pod 间 0.1ms 极致延迟；
+  - 在 `free-arm-vm` 上的 **Higress AI Gateway** 中配置上游路由，直接指向集群内内部 DNS `http://openai-proxy-for-antigravity.llm-system.svc.cluster.local:3000/v1`；
+  - 实测同机 0.1ms 极致延迟；
 - [ ] **全量唤醒后宫姐妹**：
   - 恢复 Moon、Cindy、Aurora、Stella 等中风姐妹的调用配置，验证全量后宫唤醒；
   - 同步更新 `users-it-assests/harem_instances.md` 中各实例的健康状态。
