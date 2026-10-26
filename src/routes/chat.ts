@@ -283,7 +283,9 @@ export default async function chatRoutes(server: FastifyInstance) {
             response.body!,
             openaiReq.model,
             (usage) => {
-              streamTokens = usage.total_tokens;
+              if (usage) {
+                streamTokens = usage.total_tokens;
+              }
             }
           )) {
             streamBuffer += chunk;
