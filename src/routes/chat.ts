@@ -276,9 +276,16 @@ export default async function chatRoutes(server: FastifyInstance) {
           });
 
           let streamBuffer = '';
+          let streamTokens: number | undefined = undefined;
 
           // Convert and stream
-          for await (const chunk of adapter.convertStream(response.body!, openaiReq.model)) {
+          for await (const chunk of adapter.convertStream(
+            response.body!,
+            openaiReq.model,
+            (usage) => {
+              streamTokens = usage.total_tokens;
+            }
+          )) {
             streamBuffer += chunk;
             reply.raw.write(chunk);
           }
@@ -293,7 +300,7 @@ export default async function chatRoutes(server: FastifyInstance) {
             'stream',
             duration,
             'success',
-            undefined, // tokens not easily available for stream
+            streamTokens,
             openaiReq,
             streamBuffer
           );
