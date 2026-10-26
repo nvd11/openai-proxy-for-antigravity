@@ -25,9 +25,33 @@ export default async function chatRoutes(server: FastifyInstance) {
       const startTime = Date.now();
       const openaiReq = request.body;
 
+      // Safe preview logging to prevent event-loop latency and log bloat on large payloads
+      const rawBodyPreview = (() => {
+        try {
+          const serialized = JSON.stringify(openaiReq);
+          if (serialized.length > 4096) {
+            return serialized.slice(0, 4096) + `... [truncated, total ${serialized.length} bytes]`;
+          }
+          return serialized;
+        } catch {
+          return '[unserializable body]';
+        }
+      })();
+
       log.info('⬇️ INCOMING REQUEST FROM CLIENT', {
-        headers: request.headers,
-        body: JSON.stringify(openaiReq, null, 2),
+        headers: {
+          'content-type': request.headers['content-type'],
+          'content-length': request.headers['content-length'],
+          'x-request-id': request.headers['x-request-id'],
+          'user-agent': request.headers['user-agent'],
+        },
+        model: openaiReq?.model,
+        messagesCount: openaiReq?.messages?.length,
+        bodyPreview: rawBodyPreview,
+      });
+
+      log.debug('⬇️ INCOMING REQUEST FULL BODY', {
+        body: openaiReq,
       });
 
       try {
