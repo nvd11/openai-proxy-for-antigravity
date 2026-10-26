@@ -85,6 +85,12 @@ export interface OpenAIResponse {
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens: number;
+    prompt_tokens_details?: {
+      cached_tokens?: number;
+    };
+    completion_tokens_details?: {
+      reasoning_tokens?: number;
+    };
   };
 }
 
@@ -755,11 +761,28 @@ export class OpenAIToAntigravityAdapter {
         },
         finish_reason: finishReason,
       }],
-      usage: data.response?.usageMetadata || data.usageMetadata ? {
-        prompt_tokens: data.response?.usageMetadata?.promptTokenCount || data.usageMetadata?.promptTokenCount || 0,
-        completion_tokens: data.response?.usageMetadata?.candidatesTokenCount || data.usageMetadata?.candidatesTokenCount || 0,
-        total_tokens: data.response?.usageMetadata?.totalTokenCount || data.usageMetadata?.totalTokenCount || 0,
-      } : undefined,
+      usage: this.extractUsage(data.response?.usageMetadata || data.usageMetadata),
+    };
+  }
+
+  /**
+   * Helper to extract and format OpenAI usage from Antigravity usageMetadata
+   */
+  private extractUsage(usageMeta: any): OpenAIResponse['usage'] | undefined {
+    if (!usageMeta) return undefined;
+
+    const promptTokens = usageMeta.promptTokenCount || 0;
+    const completionTokens = usageMeta.candidatesTokenCount || 0;
+    const totalTokens = usageMeta.totalTokenCount || (promptTokens + completionTokens);
+    const cachedTokens = usageMeta.cachedContentTokenCount || 0;
+
+    return {
+      prompt_tokens: promptTokens,
+      completion_tokens: completionTokens,
+      total_tokens: totalTokens,
+      prompt_tokens_details: {
+        cached_tokens: cachedTokens,
+      },
     };
   }
 
@@ -769,12 +792,12 @@ export class OpenAIToAntigravityAdapter {
   async *convertStream(
     stream: ReadableStream,
     requestedModel: string,
-    onUsage?: (usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number }) => void
+    onUsage?: (usage: OpenAIResponse['usage']) => void
   ): AsyncGenerator<string> {
     const reader = stream.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    let accumulatedUsage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | null = null;
+    let accumulatedUsage: OpenAIResponse['usage'] | null = null;
     let streamId = `chatcmpl-${Date.now()}`;
     let createdTime = Math.floor(Date.now() / 1000);
 
@@ -830,12 +853,8 @@ export class OpenAIToAntigravityAdapter {
             // Capture usage metadata if present in stream chunk
             const usageMeta = parsed.response?.usageMetadata || parsed.usageMetadata;
             if (usageMeta) {
-              accumulatedUsage = {
-                prompt_tokens: usageMeta.promptTokenCount || 0,
-                completion_tokens: usageMeta.candidatesTokenCount || 0,
-                total_tokens: usageMeta.totalTokenCount || 0,
-              };
-              if (onUsage) {
+              accumulatedUsage = this.extractUsage(usageMeta) || null;
+              if (onUsage && accumulatedUsage) {
                 onUsage(accumulatedUsage);
               }
             }
