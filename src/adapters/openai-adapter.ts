@@ -57,6 +57,9 @@ export interface OpenAIRequest {
   };
   thinking_budget?: number;
   thinkingBudget?: number;
+  stream_options?: {
+    include_usage?: boolean;
+  };
 }
 
 export interface OpenAIResponse {
@@ -765,11 +768,17 @@ export class OpenAIToAntigravityAdapter {
    */
   async *convertStream(
     stream: ReadableStream,
-    requestedModel: string
+    requestedModel: string,
+    onUsage?: (usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number }) => void
   ): AsyncGenerator<string> {
     const reader = stream.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let accumulatedUsage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | null = null;
+    let streamId = `chatcmpl-${Date.now()}`;
+    let createdTime = Math.floor(Date.now() / 1000);
+
+    let usageEmitted = false;
 
     log.info('Starting stream conversion', { requestedModel });
 
@@ -798,18 +807,60 @@ export class OpenAIToAntigravityAdapter {
 
           const data = line.slice(6);
           if (data === '[DONE]') {
+            // If we captured usage metadata, yield the final chunk with usage before [DONE]
+            if (accumulatedUsage && !usageEmitted) {
+              usageEmitted = true;
+              const usageChunk = {
+                id: streamId,
+                object: 'chat.completion.chunk',
+                created: createdTime,
+                model: requestedModel,
+                choices: [],
+                usage: accumulatedUsage,
+              };
+              yield `data: ${JSON.stringify(usageChunk)}\n\n`;
+            }
             yield 'data: [DONE]\n\n';
             continue;
           }
 
           try {
             const parsed = JSON.parse(data);
-            const openaiChunk = this.convertStreamChunk(parsed, requestedModel);
+
+            // Capture usage metadata if present in stream chunk
+            const usageMeta = parsed.response?.usageMetadata || parsed.usageMetadata;
+            if (usageMeta) {
+              accumulatedUsage = {
+                prompt_tokens: usageMeta.promptTokenCount || 0,
+                completion_tokens: usageMeta.candidatesTokenCount || 0,
+                total_tokens: usageMeta.totalTokenCount || 0,
+              };
+              if (onUsage) {
+                onUsage(accumulatedUsage);
+              }
+            }
+
+            const openaiChunk = this.convertStreamChunk(parsed, requestedModel, streamId, createdTime);
             yield `data: ${JSON.stringify(openaiChunk)}\n\n`;
           } catch (e) {
             log.warn('Failed to parse stream chunk', { error: String(e), data: data.slice(0, 200) });
           }
         }
+      }
+
+      // If stream ended without an explicit [DONE] but has usage, emit final chunk with usage + [DONE]
+      if (accumulatedUsage && !usageEmitted) {
+        usageEmitted = true;
+        const usageChunk = {
+          id: streamId,
+          object: 'chat.completion.chunk',
+          created: createdTime,
+          model: requestedModel,
+          choices: [],
+          usage: accumulatedUsage,
+        };
+        yield `data: ${JSON.stringify(usageChunk)}\n\n`;
+        yield 'data: [DONE]\n\n';
       }
     } catch (error) {
       log.error('Stream reading error', { error: String(error) });
@@ -822,7 +873,12 @@ export class OpenAIToAntigravityAdapter {
   /**
    * Converts a single Antigravity stream chunk to OpenAI format
    */
-  private convertStreamChunk(antigravityChunk: any, requestedModel: string) {
+  private convertStreamChunk(
+    antigravityChunk: any,
+    requestedModel: string,
+    id: string = `chatcmpl-${Date.now()}`,
+    created: number = Math.floor(Date.now() / 1000)
+  ) {
     const candidates = antigravityChunk.response?.candidates || antigravityChunk.candidates || [];
     const firstCandidate = candidates[0];
 
@@ -849,15 +905,19 @@ export class OpenAIToAntigravityAdapter {
       }
     }
 
+    const finishReason = firstCandidate?.finishReason
+      ? (firstCandidate.finishReason === 'STOP' ? 'stop' : firstCandidate.finishReason.toLowerCase())
+      : null;
+
     return {
-      id: `chatcmpl-${Date.now()}`,
+      id,
       object: 'chat.completion.chunk',
-      created: Math.floor(Date.now() / 1000),
+      created,
       model: requestedModel,
       choices: [{
         index: 0,
         delta,
-        finish_reason: null,
+        finish_reason: finishReason,
       }],
     };
   }
