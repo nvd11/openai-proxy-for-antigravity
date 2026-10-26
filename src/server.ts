@@ -30,13 +30,17 @@ if (process.env.LOG_LEVEL) {
 async function main() {
   const port = parseInt(process.env.PORT || '3000', 10);
   const host = process.env.HOST || '0.0.0.0';
+  // Fastify body limit (default: 100MB to support large context payloads and coding agents)
+  const bodyLimit = parseInt(process.env.BODY_LIMIT || String(100 * 1024 * 1024), 10);
 
   // Create Fastify instance
   const server = Fastify({
     logger: false, // Use our custom logger
     requestIdHeader: 'x-request-id',
     trustProxy: true,
+    bodyLimit,
   });
+  log.info(`✓ Fastify bodyLimit configured: ${(bodyLimit / (1024 * 1024)).toFixed(0)}MB (${bodyLimit} bytes)`);
 
   // Register CORS
   await server.register(cors, {

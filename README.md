@@ -263,6 +263,7 @@ You can customize the proxy via `.env` file or environment variables:
 |----------|---------|-------------|
 | `PORT` | `3000` | HTTP Server port |
 | `LOG_LEVEL` | `info` | Logging verbosity (`debug`, `info`, `error`) |
+| `BODY_LIMIT` | `104857600` | Max HTTP request payload size in bytes (default 100MB) |
 | `CONFIG_DIR` | `~/.config/antigravity-proxy` | Custom path for credentials storage |
 | `ADMIN_ENABLED` | `true` | Enable/Disable the web dashboard |
 
