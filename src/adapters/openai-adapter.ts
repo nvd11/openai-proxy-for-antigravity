@@ -79,7 +79,7 @@ export interface OpenAIResponse {
         function: { name: string; arguments: string };
       }>;
     };
-    finish_reason: 'stop' | 'length' | 'tool_calls' | null;
+    finish_reason: 'stop' | 'length' | 'tool_calls' | 'content_filter' | null;
   }>;
   usage?: {
     prompt_tokens: number;
@@ -744,7 +744,15 @@ export class OpenAIToAntigravityAdapter {
       }
     }
 
-    const finishReason = toolCalls.length > 0 ? 'tool_calls' : 'stop';
+    if (firstCandidate?.finishReason === 'MALFORMED_FUNCTION_CALL' && !content && toolCalls.length === 0) {
+      content = 'Error: Model generated a malformed function call. Please retry or adjust prompt context.';
+      log.warn('Gemini returned MALFORMED_FUNCTION_CALL in non-streaming response', { requestedModel });
+    }
+
+    const finishReason = this.mapFinishReason(
+      firstCandidate?.finishReason || 'STOP',
+      toolCalls.length > 0
+    ) || (toolCalls.length > 0 ? 'tool_calls' : 'stop');
 
     return {
       id: `chatcmpl-${Date.now()}`,
@@ -763,6 +771,33 @@ export class OpenAIToAntigravityAdapter {
       }],
       usage: this.extractUsage(data.response?.usageMetadata || data.usageMetadata),
     };
+  }
+
+  /**
+   * Maps Antigravity/Gemini finishReason to standard OpenAI finish_reason
+   */
+  private mapFinishReason(
+    geminiReason: string | undefined | null,
+    hasToolCalls: boolean
+  ): 'stop' | 'length' | 'tool_calls' | 'content_filter' | null {
+    if (!geminiReason) return null;
+
+    switch (geminiReason.toUpperCase()) {
+      case 'STOP':
+        return hasToolCalls ? 'tool_calls' : 'stop';
+      case 'MAX_TOKENS':
+        return 'length';
+      case 'SAFETY':
+      case 'RECITATION':
+      case 'BLOCKLIST':
+      case 'PROHIBITED_CONTENT':
+      case 'SPII':
+        return 'content_filter';
+      case 'MALFORMED_FUNCTION_CALL':
+        return 'stop';
+      default:
+        return hasToolCalls ? 'tool_calls' : 'stop';
+    }
   }
 
   /**
@@ -802,6 +837,9 @@ export class OpenAIToAntigravityAdapter {
     let createdTime = Math.floor(Date.now() / 1000);
 
     let usageEmitted = false;
+    let hasSeenToolCalls = false;
+    let finishReasonEmitted = false;
+    let toolCallCount = 0;
 
     log.info('Starting stream conversion', { requestedModel });
 
@@ -830,6 +868,23 @@ export class OpenAIToAntigravityAdapter {
 
           const data = line.slice(6);
           if (data === '[DONE]') {
+            // Ensure finish_reason was emitted before completing
+            if (!finishReasonEmitted) {
+              finishReasonEmitted = true;
+              const finishChunk = {
+                id: streamId,
+                object: 'chat.completion.chunk',
+                created: createdTime,
+                model: requestedModel,
+                choices: [{
+                  index: 0,
+                  delta: {},
+                  finish_reason: hasSeenToolCalls ? 'tool_calls' : 'stop',
+                }],
+              };
+              yield `data: ${JSON.stringify(finishChunk)}\n\n`;
+            }
+
             // If we captured usage metadata, yield the final chunk with usage before [DONE]
             if (accumulatedUsage && !usageEmitted) {
               usageEmitted = true;
@@ -859,12 +914,43 @@ export class OpenAIToAntigravityAdapter {
               }
             }
 
-            const openaiChunk = this.convertStreamChunk(parsed, requestedModel, streamId, createdTime);
+            const { chunk: openaiChunk, hasToolCalls: chunkHasToolCalls, newToolCallCount } = this.convertStreamChunk(
+              parsed,
+              requestedModel,
+              streamId,
+              createdTime,
+              hasSeenToolCalls,
+              toolCallCount
+            );
+            if (chunkHasToolCalls) {
+              hasSeenToolCalls = true;
+            }
+            toolCallCount = newToolCallCount;
+            if (openaiChunk.choices[0]?.finish_reason != null) {
+              finishReasonEmitted = true;
+            }
             yield `data: ${JSON.stringify(openaiChunk)}\n\n`;
           } catch (e) {
             log.warn('Failed to parse stream chunk', { error: String(e), data: data.slice(0, 200) });
           }
         }
+      }
+
+      // If stream ended without an explicit [DONE]
+      if (!finishReasonEmitted) {
+        finishReasonEmitted = true;
+        const finishChunk = {
+          id: streamId,
+          object: 'chat.completion.chunk',
+          created: createdTime,
+          model: requestedModel,
+          choices: [{
+            index: 0,
+            delta: {},
+            finish_reason: hasSeenToolCalls ? 'tool_calls' : 'stop',
+          }],
+        };
+        yield `data: ${JSON.stringify(finishChunk)}\n\n`;
       }
 
       // If stream ended without an explicit [DONE] but has usage, emit final chunk with usage + [DONE]
@@ -896,12 +982,16 @@ export class OpenAIToAntigravityAdapter {
     antigravityChunk: any,
     requestedModel: string,
     id: string = `chatcmpl-${Date.now()}`,
-    created: number = Math.floor(Date.now() / 1000)
-  ) {
+    created: number = Math.floor(Date.now() / 1000),
+    hasSeenToolCalls: boolean = false,
+    toolCallStartIndex: number = 0
+  ): { chunk: any; hasToolCalls: boolean; newToolCallCount: number } {
     const candidates = antigravityChunk.response?.candidates || antigravityChunk.candidates || [];
     const firstCandidate = candidates[0];
 
     let delta: any = { role: 'assistant' };
+    let chunkHasToolCalls = false;
+    let currentToolCallIndex = toolCallStartIndex;
 
     if (firstCandidate?.content?.parts) {
       for (const part of firstCandidate.content.parts) {
@@ -911,33 +1001,46 @@ export class OpenAIToAntigravityAdapter {
           delta.content = (delta.content || '') + part.text;
         }
         if (part.functionCall) {
-          delta.tool_calls = [{
-            index: 0,
+          chunkHasToolCalls = true;
+          if (!delta.tool_calls) {
+            delta.tool_calls = [];
+          }
+          delta.tool_calls.push({
+            index: currentToolCallIndex++,
             id: `call_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
             type: 'function',
             function: {
               name: part.functionCall.name,
               arguments: JSON.stringify(part.functionCall.args || {}),
             },
-          }];
+          });
         }
       }
     }
 
+    if (firstCandidate?.finishReason === 'MALFORMED_FUNCTION_CALL' && !delta.content && !chunkHasToolCalls && !hasSeenToolCalls) {
+      delta.content = 'Error: Model generated a malformed function call. Please retry or adjust prompt context.';
+      log.warn('Gemini returned MALFORMED_FUNCTION_CALL in stream chunk', { requestedModel });
+    }
+
     const finishReason = firstCandidate?.finishReason
-      ? (firstCandidate.finishReason === 'STOP' ? 'stop' : firstCandidate.finishReason.toLowerCase())
+      ? this.mapFinishReason(firstCandidate.finishReason, hasSeenToolCalls || chunkHasToolCalls)
       : null;
 
     return {
-      id,
-      object: 'chat.completion.chunk',
-      created,
-      model: requestedModel,
-      choices: [{
-        index: 0,
-        delta,
-        finish_reason: finishReason,
-      }],
+      chunk: {
+        id,
+        object: 'chat.completion.chunk',
+        created,
+        model: requestedModel,
+        choices: [{
+          index: 0,
+          delta,
+          finish_reason: finishReason,
+        }],
+      },
+      hasToolCalls: chunkHasToolCalls,
+      newToolCallCount: currentToolCallIndex,
     };
   }
 }
