@@ -18,7 +18,8 @@
     "docker:build": "docker build -f docker/Dockerfile -t antigravity-proxy .",
     "docker:up": "docker-compose -f docker/docker-compose.yml up -d",
     "docker:down": "docker-compose -f docker/docker-compose.yml down",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test test/openai-adapter.test.js"
   },
   "keywords": [
     "antigravity",
