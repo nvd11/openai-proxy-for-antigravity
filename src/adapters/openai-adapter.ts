@@ -126,6 +126,13 @@ interface AntigravityRequest {
   };
 }
 
+export const MALFORMED_FUNCTION_CALL_ERROR =
+  'Error: Model generated a malformed function call. Please retry or adjust prompt context.';
+
+export function isMalformedResponse(content: string | null | undefined): boolean {
+  return typeof content === 'string' && content.includes('malformed function call');
+}
+
 export class OpenAIToAntigravityAdapter {
   /**
    * Fields permitted by Google Gemini/Antigravity API Schema proto
@@ -377,15 +384,22 @@ export class OpenAIToAntigravityAdapter {
           responseObj = { output: contentStr || '' };
         }
 
-        contents.push({
-          role: 'user',
-          parts: [{
-            functionResponse: {
-              name: toolName,
-              response: responseObj,
-            },
-          }],
-        });
+        const functionResponsePart = {
+          functionResponse: {
+            name: toolName,
+            response: responseObj,
+          },
+        };
+
+        const lastContent = contents[contents.length - 1];
+        if (lastContent && lastContent.role === 'user' && lastContent.parts.every((p: any) => p.functionResponse)) {
+          lastContent.parts.push(functionResponsePart);
+        } else {
+          contents.push({
+            role: 'user',
+            parts: [functionResponsePart],
+          });
+        }
       }
     }
 
@@ -745,7 +759,7 @@ export class OpenAIToAntigravityAdapter {
     }
 
     if (firstCandidate?.finishReason === 'MALFORMED_FUNCTION_CALL' && !content && toolCalls.length === 0) {
-      content = 'Error: Model generated a malformed function call. Please retry or adjust prompt context.';
+      content = MALFORMED_FUNCTION_CALL_ERROR;
       log.warn('Gemini returned MALFORMED_FUNCTION_CALL in non-streaming response', { requestedModel });
     }
 
@@ -1019,7 +1033,7 @@ export class OpenAIToAntigravityAdapter {
     }
 
     if (firstCandidate?.finishReason === 'MALFORMED_FUNCTION_CALL' && !delta.content && !chunkHasToolCalls && !hasSeenToolCalls) {
-      delta.content = 'Error: Model generated a malformed function call. Please retry or adjust prompt context.';
+      delta.content = MALFORMED_FUNCTION_CALL_ERROR;
       log.warn('Gemini returned MALFORMED_FUNCTION_CALL in stream chunk', { requestedModel });
     }
 
