@@ -72,7 +72,7 @@ flowchart LR
   "activeIndexByFamily": { "claude": 0, "gemini": 0 },
   "accounts": [
     {
-      "email": "<account-email>",
+      "email": "<账号邮箱>",
       "refreshToken": "<103 字符的 Google OAuth refresh token>",
       "addedAt": 1793524150278,        // ms 时间戳
       "lastUsed": 0,                    // 0 表示尚未被使用

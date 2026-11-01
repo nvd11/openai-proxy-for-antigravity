@@ -102,9 +102,9 @@ flowchart TD
 - [x] 成功 Fork 代码至私人仓库 [nvd11/openai-proxy-for-antigravity](https://github.com/nvd11/openai-proxy-for-antigravity)。
 
 ### 📍 Milestone 2: 双 Google AI Pro 账号轮询与配额调度（✅ 已达成）
-- [x] 成功导入主人名下的第 2 个 Google AI Pro 账号凭据 (`<account-email>`) 至 `antigravity-accounts.json`，组成完全体双账号池；
+- [x] 成功导入主人名下的第 2 个 Google AI Pro 账号凭据（账号邮箱见 `antigravity-accounts.json`，此处不落盘）至 `antigravity-accounts.json`，组成完全体双账号池；
 - [x] 排查并修复 `AccountManager` 构造逻辑中多账号追加被提前 `return` 阻断的底层 Bug；
-- [x] 验证多账号负载均衡（Round-Robin 轮询调度：实测在 `<account-email>` 与 `<account-email>` 之间交替请求）；
+- [x] 验证多账号负载均衡（Round-Robin 轮询调度：实测在账号池前两位账号之间交替请求）；
 - [x] 实现并验证 429 Rate-Limit 自动检测与账号故障无感切换（单次调用在捕获 429 时自动内部 Failover 至备用账号，外部调用者零报错感知）；
 - [x] 验证 Web Admin Dashboard（`/admin` 及 `/admin/api/accounts`、`/admin/api/metrics`）的实时账号健康状态与调用监控。
 
