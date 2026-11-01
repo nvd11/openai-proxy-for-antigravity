@@ -4,6 +4,7 @@
  */
 
 import { createLogger } from '../lib/logger.js';
+import { sanitizeForLog } from '../lib/sanitize.js';
 
 const log = createLogger('log-store');
 
@@ -26,8 +27,11 @@ export class LogService {
 
   private truncate(data: any): any {
     if (!data) return data;
-    const str = JSON.stringify(data);
-    if (str.length <= this.maxPayloadSize) return data;
+    // Strip base64 image payloads BEFORE serialising, otherwise a single image
+    // request would materialise a multi-megabyte string in memory.
+    const sanitized = sanitizeForLog(data);
+    const str = JSON.stringify(sanitized);
+    if (str.length <= this.maxPayloadSize) return sanitized;
     return {
       _truncated: true,
       originalLength: str.length,

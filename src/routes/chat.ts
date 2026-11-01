@@ -9,6 +9,7 @@ import { accountService } from '../services/account-manager.js';
 import { accessTokenExpired } from '../lib/auth/auth.js';
 import { refreshAccessToken } from '../lib/auth/token.js';
 import { createLogger } from '../lib/logger.js';
+import { sanitizeForLog } from '../lib/sanitize.js';
 import { metricsService } from '../services/metrics-collector.js';
 import { logService } from '../services/log-store.js';
 
@@ -25,10 +26,11 @@ export default async function chatRoutes(server: FastifyInstance) {
       const startTime = Date.now();
       const openaiReq = request.body;
 
-      // Safe preview logging to prevent event-loop latency and log bloat on large payloads
+      // Safe preview logging to prevent event-loop latency and log bloat on large payloads.
+      // Image base64 is stripped first so a single 8MB image can never blow up memory/logs.
       const rawBodyPreview = (() => {
         try {
-          const serialized = JSON.stringify(openaiReq);
+          const serialized = JSON.stringify(sanitizeForLog(openaiReq));
           if (serialized.length > 4096) {
             return serialized.slice(0, 4096) + `... [truncated, total ${serialized.length} bytes]`;
           }
@@ -51,7 +53,7 @@ export default async function chatRoutes(server: FastifyInstance) {
       });
 
       log.debug('⬇️ INCOMING REQUEST FULL BODY', {
-        body: openaiReq,
+        body: sanitizeForLog(openaiReq),
       });
 
       try {
@@ -101,6 +103,12 @@ export default async function chatRoutes(server: FastifyInstance) {
             },
           });
         }
+
+        // ⚠️ Build the account-independent payload ONCE per HTTP request.
+        // This is where remote images are downloaded, so it MUST live outside
+        // the account-rotation / malformed-retry loops, otherwise the same
+        // image would be re-fetched on every attempt.
+        const prepared = await adapter.prepareRequest(openaiReq);
 
         // Max retries on MALFORMED_FUNCTION_CALL from upstream Gemini
         const MAX_MALFORMED_RETRIES = 2;
@@ -159,9 +167,9 @@ export default async function chatRoutes(server: FastifyInstance) {
             // Get projectId
             const projectId = currentAccount.parts.projectId || currentAccount.parts.managedProjectId || 'rising-fact-p41fc';
 
-            // Convert OpenAI request to Antigravity
-            const { url, init, headerStyle } = await adapter.convertRequest(
-              openaiReq,
+            // Wrap the already-prepared payload for this account
+            const { url, init, headerStyle } = adapter.buildRequest(
+              prepared,
               accessToken,
               projectId
             );

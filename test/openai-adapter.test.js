@@ -382,3 +382,177 @@ test('Non-streaming transparent retry simulation: recovers when attempt 1 is mal
   assert.equal(finalResult.choices[0].message.content, 'Clean non-streaming response');
   assert.equal(finalResult.choices[0].finish_reason, 'stop');
 });
+
+// ============================================================================
+// Multimodal image input (image_url -> inlineData)
+// ============================================================================
+
+import http from 'node:http';
+
+const PNG_BYTES = Buffer.from([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+  0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+]);
+const JPEG_BYTES = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46]);
+const WEBP_BYTES = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBP'), Buffer.alloc(8)]);
+
+function dataUrl(mime, bytes) {
+  return `data:${mime};base64,${bytes.toString('base64')}`;
+}
+
+function buildRequestWithImage(imageUrl) {
+  return {
+    model: 'gemini-3.8-flash',
+    messages: [
+      { role: 'user', content: [
+        { type: 'text', text: 'What is in this image?' },
+        { type: 'image_url', image_url: { url: imageUrl } },
+      ] },
+    ],
+  };
+}
+
+test('image: data URL PNG converts to inlineData with correct mime and pure base64', async () => {
+  const { init } = await adapter.convertRequest(buildRequestWithImage(dataUrl('image/png', PNG_BYTES)), 'tok', 'proj');
+  const body = JSON.parse(init.body);
+  const parts = body.request.contents[0].parts;
+
+  assert.equal(parts.length, 2);
+  assert.equal(parts[0].text, 'What is in this image?');
+  assert.equal(parts[1].inlineData.mimeType, 'image/png');
+  // data must be pure base64 (no data: prefix) and decode back to original bytes
+  const decoded = Buffer.from(parts[1].inlineData.data, 'base64');
+  assert.deepEqual(decoded, PNG_BYTES);
+  assert.equal(parts[1].inlineData.data.includes(','), false);
+});
+
+test('image: JPEG and WebP magic bytes are detected correctly', async () => {
+  const jpeg = await adapter.convertRequest(buildRequestWithImage(dataUrl('application/octet-stream', JPEG_BYTES)), 'tok', 'proj');
+  assert.equal(JSON.parse(jpeg.init.body).request.contents[0].parts[1].inlineData.mimeType, 'image/jpeg');
+
+  const webp = await adapter.convertRequest(buildRequestWithImage(dataUrl('application/octet-stream', WEBP_BYTES)), 'tok', 'proj');
+  assert.equal(JSON.parse(webp.init.body).request.contents[0].parts[1].inlineData.mimeType, 'image/webp');
+});
+
+test('image: malformed data URL degrades to text placeholder without throwing', async () => {
+  const { init } = await adapter.convertRequest(buildRequestWithImage('data:image/png;base64,%%%not-base64%%%'), 'tok', 'proj');
+  const parts = JSON.parse(init.body).request.contents[0].parts;
+  assert.equal(parts.length, 2);
+  assert.match(parts[1].text || '', /\[image omitted:/);
+  assert.equal(parts[1].inlineData, undefined);
+});
+
+test('image: oversized image (>8MB) degrades to text placeholder', async () => {
+  const big = Buffer.alloc(8 * 1024 * 1024 + 1, 0x89); // not valid PNG magic, but > size cap
+  const { init } = await adapter.convertRequest(buildRequestWithImage(dataUrl('image/png', big)), 'tok', 'proj');
+  const parts = JSON.parse(init.body).request.contents[0].parts;
+  assert.match(parts[1].text || '', /\[image omitted:/);
+});
+
+test('image: total request budget (15MB) rejects second image', async () => {
+  const first = Buffer.alloc(8 * 1024 * 1024, 0x00);
+  first[0] = 0x89; first[1] = 0x50; first[2] = 0x4e; first[3] = 0x47; // valid PNG magic
+  first[4] = 0x0d; first[5] = 0x0a; first[6] = 0x1a; first[7] = 0x0a;
+  const second = Buffer.alloc(8 * 1024 * 1024, 0x00);
+  second[0] = 0x89; second[1] = 0x50; second[2] = 0x4e; second[3] = 0x47;
+  second[4] = 0x0d; second[5] = 0x0a; second[6] = 0x1a; second[7] = 0x0a;
+
+  const req = {
+    model: 'gemini-3.8-flash',
+    messages: [
+      { role: 'user', content: [
+        { type: 'image_url', image_url: { url: dataUrl('image/png', first) } },
+        { type: 'image_url', image_url: { url: dataUrl('image/png', second) } },
+      ] },
+    ],
+  };
+  const { init } = await adapter.convertRequest(req, 'tok', 'proj');
+  const parts = JSON.parse(init.body).request.contents[0].parts;
+  assert.equal(parts.length, 2);
+  assert.equal(parts[0].inlineData.mimeType, 'image/png');
+  assert.match(parts[1].text || '', /\[image omitted:/);
+});
+
+test('image: pure text messages behave exactly as before (regression)', async () => {
+  const req = { model: 'gemini-3.8-flash', messages: [{ role: 'user', content: 'hello only' }] };
+  const { init } = await adapter.convertRequest(req, 'tok', 'proj');
+  const parts = JSON.parse(init.body).request.contents[0].parts;
+  assert.equal(parts.length, 1);
+  assert.equal(parts[0].text, 'hello only');
+  assert.equal(parts[0].inlineData, undefined);
+});
+
+test('image: mixed content preserves text/image/text order', async () => {
+  const req = {
+    model: 'gemini-3.8-flash',
+    messages: [
+      { role: 'user', content: [
+        { type: 'text', text: 'A' },
+        { type: 'image_url', image_url: { url: dataUrl('image/png', PNG_BYTES) } },
+        { type: 'text', text: 'B' },
+      ] },
+    ],
+  };
+  const { init } = await adapter.convertRequest(req, 'tok', 'proj');
+  const parts = JSON.parse(init.body).request.contents[0].parts;
+  assert.equal(parts.length, 3);
+  assert.equal(parts[0].text, 'A');
+  assert.equal(parts[1].inlineData.mimeType, 'image/png');
+  assert.equal(parts[2].text, 'B');
+});
+
+test('image: remote URL is fetched and inlined', async () => {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': PNG_BYTES.length });
+    res.end(PNG_BYTES);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+
+  const prev = process.env.IMAGE_FETCH_ALLOW_PRIVATE;
+  process.env.IMAGE_FETCH_ALLOW_PRIVATE = 'true';
+  try {
+    const { init } = await adapter.convertRequest(
+      buildRequestWithImage(`http://127.0.0.1:${port}/img.png`), 'tok', 'proj'
+    );
+    const parts = JSON.parse(init.body).request.contents[0].parts;
+    assert.equal(parts[1].inlineData.mimeType, 'image/png');
+    assert.deepEqual(Buffer.from(parts[1].inlineData.data, 'base64'), PNG_BYTES);
+  } finally {
+    if (prev === undefined) delete process.env.IMAGE_FETCH_ALLOW_PRIVATE;
+    else process.env.IMAGE_FETCH_ALLOW_PRIVATE = prev;
+    server.close();
+  }
+});
+
+test('image: remote 404 degrades to placeholder without throwing', async () => {
+  const server = http.createServer((req, res) => {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('not found');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+
+  const prev = process.env.IMAGE_FETCH_ALLOW_PRIVATE;
+  process.env.IMAGE_FETCH_ALLOW_PRIVATE = 'true';
+  try {
+    const { init } = await adapter.convertRequest(
+      buildRequestWithImage(`http://127.0.0.1:${port}/missing.png`), 'tok', 'proj'
+    );
+    const parts = JSON.parse(init.body).request.contents[0].parts;
+    assert.match(parts[1].text || '', /\[image omitted:/);
+  } finally {
+    if (prev === undefined) delete process.env.IMAGE_FETCH_ALLOW_PRIVATE;
+    else process.env.IMAGE_FETCH_ALLOW_PRIVATE = prev;
+    server.close();
+  }
+});
+
+test('image: private/loopback hosts are blocked by default (SSRF guard)', async () => {
+  const { init } = await adapter.convertRequest(
+    buildRequestWithImage('http://127.0.0.1:9999/img.png'), 'tok', 'proj'
+  );
+  const parts = JSON.parse(init.body).request.contents[0].parts;
+  assert.match(parts[1].text || '', /\[image omitted:/);
+  assert.match(parts[1].text || '', /private\/loopback/);
+});

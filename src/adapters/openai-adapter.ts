@@ -4,6 +4,7 @@
  */
 
 import { createLogger } from '../lib/logger.js';
+import { createImageBudget, resolveImageRef } from '../lib/image-input.js';
 import {
   ANTIGRAVITY_ENDPOINT,
   ANTIGRAVITY_HEADERS,
@@ -19,7 +20,14 @@ const log = createLogger('openai-adapter');
 // OpenAI API types
 export interface OpenAIMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string | Array<{ type: string; text?: string; image_url?: unknown }>;
+  content:
+    | string
+    | Array<{
+        type?: string;
+        text?: string;
+        image_url?: unknown;
+        [key: string]: unknown;
+      }>;
   tool_calls?: Array<{
     id: string;
     type: 'function';
@@ -95,15 +103,19 @@ export interface OpenAIResponse {
 }
 
 // Antigravity API types (simplified)
+interface AntigravityPart {
+  text?: string;
+  thought?: boolean;
+  thoughtSignature?: string;
+  functionCall?: { name: string; args: Record<string, unknown> };
+  functionResponse?: { name: string; response: Record<string, unknown> };
+  /** Gemini-native inline image (base64 payload without the data: prefix). */
+  inlineData?: { mimeType: string; data: string };
+}
+
 interface AntigravityContent {
   role: 'user' | 'model';
-  parts: Array<{
-    text?: string;
-    thought?: boolean;
-    thoughtSignature?: string;
-    functionCall?: { name: string; args: Record<string, unknown> };
-    functionResponse?: { name: string; response: Record<string, unknown> };
-  }>;
+  parts: AntigravityPart[];
 }
 
 interface AntigravityTool {
@@ -124,6 +136,18 @@ interface AntigravityRequest {
     topP?: number;
     stopSequences?: string[];
   };
+}
+
+/**
+ * Account-independent request payload. Building this is the expensive step
+ * (it may download remote images), so callers must build it ONCE per HTTP
+ * request and reuse it across account rotation / retry attempts.
+ */
+export interface PreparedAntigravityRequest {
+  internalModel: string;
+  headerStyle: HeaderStyle;
+  stream: boolean;
+  requestPayload: AntigravityRequest;
 }
 
 export const MALFORMED_FUNCTION_CALL_ERROR =
@@ -299,15 +323,19 @@ export class OpenAIToAntigravityAdapter {
   }
 
   /**
-   * Converts OpenAI messages to Antigravity contents
+   * Converts OpenAI messages to Antigravity contents.
+   *
+   * Async because `image_url` parts may reference remote images that need to
+   * be downloaded and inlined as base64 `inlineData`.
    */
-  convertMessages(messages: OpenAIMessage[]): {
+  async convertMessages(messages: OpenAIMessage[]): Promise<{
     contents: AntigravityContent[];
     systemInstruction?: { parts: Array<{ text: string }> };
-  } {
+  }> {
     const contents: AntigravityContent[] = [];
     let systemText = '';
     const toolCallNames = new Map<string, string>();
+    const imageBudget = createImageBudget();
 
     for (const msg of messages) {
       if (msg.role === 'system') {
@@ -318,22 +346,41 @@ export class OpenAIToAntigravityAdapter {
       }
 
       if (msg.role === 'user') {
-        const parts: AntigravityContent['parts'] = [];
+        const parts: AntigravityPart[] = [];
 
         if (typeof msg.content === 'string') {
           parts.push({ text: msg.content });
         } else if (Array.isArray(msg.content)) {
           for (const part of msg.content) {
-            if (part.type === 'text' && part.text) {
+            if (part.type === 'text' && typeof part.text === 'string') {
               parts.push({ text: part.text });
+              continue;
             }
-            // TODO: Handle image_url if needed
+
+            // OpenAI image input: { type: 'image_url', image_url: { url } }.
+            // Some clients also send `input_image` / a bare `image_url` field.
+            const isImagePart =
+              part.type === 'image_url' || part.type === 'input_image' || part.image_url !== undefined;
+
+            if (isImagePart) {
+              const resolved = await resolveImageRef(part.image_url ?? part, imageBudget);
+              if ('inlineData' in resolved) {
+                parts.push({ inlineData: resolved.inlineData });
+              } else {
+                log.warn('Image content omitted from request', {
+                  reason: resolved.omitted,
+                });
+                // Explicit placeholder so the model does not hallucinate content
+                // for an image it never received.
+                parts.push({ text: `[image omitted: ${resolved.omitted}]` });
+              }
+            }
           }
         }
 
         contents.push({ role: 'user', parts });
       } else if (msg.role === 'assistant') {
-        const parts: AntigravityContent['parts'] = [];
+        const parts: AntigravityPart[] = [];
 
         if (msg.content) {
           const text = typeof msg.content === 'string' ? msg.content : '';
@@ -637,17 +684,12 @@ export class OpenAIToAntigravityAdapter {
   }
 
   /**
-   * Converts full OpenAI request to Antigravity format
+   * Builds the account-independent Antigravity request payload.
+   *
+   * May download remote images, therefore callers should build this exactly
+   * once per incoming HTTP request and reuse it for every account attempt.
    */
-  async convertRequest(
-    openaiReq: OpenAIRequest,
-    accessToken: string,
-    projectId: string
-  ): Promise<{
-    url: string;
-    init: RequestInit;
-    headerStyle: HeaderStyle;
-  }> {
+  async prepareRequest(openaiReq: OpenAIRequest): Promise<PreparedAntigravityRequest> {
     const headerStyle = this.getHeaderStyle(openaiReq.model);
     const modelName = this.extractModelName(openaiReq.model);
     const stream = openaiReq.stream ?? false;
@@ -655,7 +697,7 @@ export class OpenAIToAntigravityAdapter {
     // Resolve the actual internal model ID
     const internalModel = this.resolveAntigravityModel(modelName);
 
-    const { contents, systemInstruction } = this.convertMessages(openaiReq.messages);
+    const { contents, systemInstruction } = await this.convertMessages(openaiReq.messages);
     const tools = this.convertTools(openaiReq.tools);
 
     const thinkingBudget = this.determineThinkingBudget(openaiReq, internalModel);
@@ -695,6 +737,23 @@ export class OpenAIToAntigravityAdapter {
       generationConfig,
     };
 
+    return { internalModel, headerStyle, stream, requestPayload };
+  }
+
+  /**
+   * Wraps a prepared payload into the final HTTP request for a given account.
+   */
+  buildRequest(
+    prepared: PreparedAntigravityRequest,
+    accessToken: string,
+    projectId: string
+  ): {
+    url: string;
+    init: RequestInit;
+    headerStyle: HeaderStyle;
+  } {
+    const { internalModel, headerStyle, stream, requestPayload } = prepared;
+
     // Wrap the body as required by v1internal endpoint
     const wrappedBody = {
       project: projectId,
@@ -722,6 +781,26 @@ export class OpenAIToAntigravityAdapter {
         body: JSON.stringify(wrappedBody),
       },
     };
+  }
+
+  /**
+   * Converts full OpenAI request to Antigravity format.
+   *
+   * Convenience wrapper used by tests and one-shot callers; the chat route
+   * uses `prepareRequest` + `buildRequest` so remote images are resolved only
+   * once per HTTP request instead of once per retry attempt.
+   */
+  async convertRequest(
+    openaiReq: OpenAIRequest,
+    accessToken: string,
+    projectId: string
+  ): Promise<{
+    url: string;
+    init: RequestInit;
+    headerStyle: HeaderStyle;
+  }> {
+    const prepared = await this.prepareRequest(openaiReq);
+    return this.buildRequest(prepared, accessToken, projectId);
   }
 
   /**

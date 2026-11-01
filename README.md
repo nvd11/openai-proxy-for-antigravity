@@ -31,6 +31,7 @@
 - **🔐 Standalone Authentication**: Built-in OAuth wizard to securely connect your Google account.
 - **🔄 Multi-Account Rotation**: Automatically rotates between multiple Google accounts to maximize quota.
 - **⚡ Smart Rate Limiting**: Detects 429 errors and switches accounts instantly.
+- **🖼️ Multimodal Image Input**: OpenAI `image_url` parts (base64 data URLs or remote `http(s)` URLs) are converted to Gemini-native `inlineData`, with size caps, MIME sniffing and SSRF protection.
 - **📊 Admin Dashboard**: Web UI to monitor uptime, requests, and token usage.
 
 ---
@@ -126,6 +127,50 @@ sequenceDiagram
 代理遵循行业标准，将模型思考过程与最终回答彻底解耦：
 - **完整响应**：思考过程存入 `message.reasoning_content`，最终回答存入 `message.content`。
 - **流式推送 (SSE)**：逐字推流时思考部分推入 `delta.reasoning_content`，回答部分推入 `delta.content`，完美适配 OpenCode 的折叠思考框展示。
+
+---
+
+## 🖼️ Multimodal Image Input
+
+OpenAI-style `image_url` content parts are transparently translated into Gemini-native
+`inlineData` parts, so Gemini 3.8 Flash / Claude 4.6 can actually *see* images instead
+of hallucinating about them.
+
+```json
+{
+  "model": "gemini-3.8-flash",
+  "messages": [{
+    "role": "user",
+    "content": [
+      { "type": "text", "text": "What text is in this image?" },
+      { "type": "image_url", "image_url": { "url": "data:image/png;base64,iVBORw0..." } }
+    ]
+  }]
+}
+```
+
+**Supported inputs**
+
+| Input | Handling |
+|---|---|
+| `data:image/...;base64,...` | decoded, magic-byte sniffed, re-encoded as `inlineData` |
+| `https://...` / `http://...` | downloaded (15s timeout, ≤3 redirects), magic-byte sniffed |
+| Unsupported / too large / blocked host | replaced by a visible `[image omitted: reason]` text placeholder |
+
+**Hard limits**
+
+| Limit | Value | Why |
+|---|---|---|
+| Single image | 8 MB binary | Gemini inline ceiling is 20 MB for the whole request (base64 inflates ~33%) |
+| All images per request | 15 MB binary | leaves headroom for prompt / tools / thinking |
+| Timeout | 15 s | avoids hanging a chat request on a dead URL |
+
+**SSRF guard** — remote URLs resolving to loopback, link-local, private (`10/8`, `172.16/12`,
+`192.168/16`, `fc00::/7`), CGNAT, or `localhost` are blocked by default. For local
+development against LAN image hosts, set `IMAGE_FETCH_ALLOW_PRIVATE=true`.
+
+> 🔒 Base64 payloads are stripped from all logs (console + admin dashboard) before
+> serialisation, so image requests never bloat memory or leak image content into logs.
 
 ---
 
@@ -266,6 +311,7 @@ You can customize the proxy via `.env` file or environment variables:
 | `BODY_LIMIT` | `104857600` | Max HTTP request payload size in bytes (default 100MB) |
 | `CONFIG_DIR` | `~/.config/antigravity-proxy` | Custom path for credentials storage |
 | `ADMIN_ENABLED` | `true` | Enable/Disable the web dashboard |
+| `IMAGE_FETCH_ALLOW_PRIVATE` | `false` | Allow remote images from loopback/private hosts (dev only — disables part of the SSRF guard) |
 
 ---
 
